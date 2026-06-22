@@ -1,0 +1,64 @@
+Here is the consolidated blueprint of your World Cup 2026 Daily Fantasy Optimization architecture, breaking down the shift in strategy, the mathematical core, and the data engineering pipeline we designed.
+
+### 1. Core Requirements & Strategy Pivot
+
+You have shifted from a traditional, budget-constrained 15-man seasonal squad to a **daily, non-budget-constrained optimization model**.
+
+* **The Goal:** Output the top **5–10 high-upside targets per position** for a specific day or round.
+* **The Priorities:** The model heavily indexes on identifying asymmetric upside via the **Scouting Bonus** (differential picks), targeting players with high underlying statistical volume (tackles/chances created), and leveraging betting market implied probabilities rather than team reputation (Base-Rate Fallacy Avoidance).
+
+---
+
+### 2. The Algorithmic Engine & Formulas
+
+Your daily player selection is driven by an Expected Value (EV) model that incorporates baseline rules, positional volume bonuses, and a unique differential multiplier.
+
+**The Base Formula:**
+
+
+$$\text{Player EV} = (\text{Base Baseline}) \times \text{Fixture Weight} + \text{Volume Bonus Probability} + \text{Scouting Premium}$$
+
+**Positional Priorities:**
+
+* **GKs & Defenders:** Prioritized purely by the opponent's attacking weakness. We use betting market data (e.g., Polymarket) to find the highest implied Clean Sheet probability.
+* **Midfielders:** The goldmine for volume stats. The algorithm explicitly targets players averaging $\ge 4.5\text{ tackles}$ or $\ge 1.5\text{ chances created}$ per 90 minutes historically, securing a highly probable $+3$ point floor.
+* **Forwards:** Prioritized by event-driven metrics (shots on target and implied goalscorer odds).
+
+**The Scouting Premium Filter:**
+Because the FIFA guidelines offer a $+2$ point bonus if a player scores $>4$ points while having under **5% ownership**, we mathematically force the algorithm to boost these low-ownership assets using a logarithmic scale:
+
+
+$$\text{Scouting Premium} = \begin{cases} 
+\ln\left(\frac{1}{\text{Selected\_By\_Pct}}\right) \times \text{Upside Coefficient} & \text{if } \text{Selected\_By\_Pct} < 0.08 \\
+0 & \text{if } \text{Selected\_By\_Pct} \ge 0.08 
+\end{cases}$$
+
+---
+
+### 3. Data Pipeline & Methodology
+
+To build this in a Jupyter Notebook, we designed an automated **Extract-Transform-Load (ETL)** pipeline that avoids messy HTML scraping and Cloudflare blocks.
+
+* **Task 1: The Tournament Fixtures (Dynamic Context)**
+* **Finding:** Sofascore blocks automated requests without heavy spoofing.
+* **Methodology:** We use **ESPN's hidden Scoreboard API** (`site.api.espn.com`) to extract the entire 104-match schedule cleanly into a Pandas DataFrame. This provides chronological match numbering, live status updates, and exact stadium/venue data.
+
+
+* **Task 2: The Player Universe (Static Baseline)**
+* **Finding:** Scraping Transfermarkt directly results in bot bans.
+* **Methodology:** We utilize a community-maintained, open-source GitHub repository (`transfermarkt-datasets`) that hosts a live, compressed CSV of global players. This instantly populates your master database with DOB, Age, Height, Foot, Club, and Market Value without a single API block.
+
+
+* **Task 3: Historical Volume Data**
+* **Methodology:** Data from **FBref** will be used to map previous club season metrics (tackles and key passes per 90) to the player universe to satisfy the Midfielder/Forward volume triggers.
+
+
+
+---
+
+### 4. Extracting FIFA "Scout Pool" (Ownership Data)
+
+The entire "Scouting Premium" logic relies on knowing the live `Selected by %` for every player.
+
+* **The Research Finding:** This data is exclusive to the official `play.fifa.com/fantasy` platform.
+* **The Extraction Strategy:** We will not use BeautifulSoup to scrape the frontend HTML. Instead, the strategy is to open the browser's Developer Tools (Network Tab) while loading the FIFA Fantasy player selection screen. We will isolate the underlying JSON API request (e.g., `/api/v1/players/`) that the frontend uses to populate the UI. By replicating this specific `GET` request with the `requests` library in Python, we can pull the live ownership percentages directly into our DataFrame right before a round locks.

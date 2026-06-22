@@ -1,0 +1,348 @@
+### Consolidated Decisions So Far
+ 
+Based on D-1, the metrics audit, and our discussion.  
+ 
+---
+ 
+# Project Goal
+ 
+Build a **World Cup 2026 Fantasy Intelligence Engine** that:
+ 
+* Creates a complete player universe for all 48 nations.
+* Scores players daily using multiple models.
+* Produces pools of recommended players rather than a single ranking.
+* Uses betting odds, historical performance, form, matchup strength, weather, referee tendencies, and eventually FIFA fantasy ownership data.
+* Supports daily optimization rather than season-long fantasy.
+ 
+---
+ 
+# User Inputs / Design Preferences
+ 
+### 1. Single Player Universe
+ 
+Not:
+ 
+```text
+player_gk
+player_defender
+player_midfielder
+player_forward
+```
+ 
+Instead:
+ 
+```text
+wc26_players
+```
+ 
+One master player table.
+ 
+Position-specific metrics live in metric columns.
+ 
+---
+ 
+### 2. Nation Mapping Is Critical
+ 
+Need universal mapping because every source names countries differently.
+ 
+Examples:
+ 
+```text
+South Korea
+Korea Republic
+Republic of Korea
+KOR
+```
+ 
+```text
+Türkiye
+Turkey
+TUR
+```
+ 
+```text
+Côte d'Ivoire
+Ivory Coast
+CIV
+```
+ 
+```text
+DR Congo
+Democratic Republic of Congo
+Congo DR
+COD
+```
+ 
+Nation table must contain:
+ 
+```text
+all_names
+all_aliases
+all_abbreviations
+source_specific_names
+```
+ 
+---
+ 
+### 3. Referee Data Is High Priority
+ 
+Need referee warehouse before tournament starts.
+ 
+Desired metrics:
+ 
+```text
+yellow_pg
+red_pg
+penalty_pg
+fouls_pg
+added_time_avg
+```
+ 
+Need:
+ 
+```text
+career
+last 25
+last 10
+```
+ 
+performance snapshots.
+ 
+Potential sources:
+ 
+* FIFA Officials List
+* WorldReferee
+* RefereeingWorld
+* FootyMetrics
+* Soccerbase
+ 
+---
+ 
+### 4. Stadium Data Must Include Environment
+ 
+Not only stadium details.
+ 
+Need:
+ 
+```text
+capacity
+roof_type
+surface
+altitude
+latitude
+longitude
+timezone
+```
+ 
+Plus:
+ 
+```text
+weather station mapping
+```
+ 
+for future weather joins.
+ 
+---
+ 
+### 5. Weather Is Important
+ 
+Weather table should be built early.
+ 
+Reason:
+ 
+Potential fantasy signal from:
+ 
+```text
+heat
+humidity
+rain
+wind
+WBGT
+```
+ 
+Potential impact:
+ 
+```text
+fatigue
+substitution rates
+late goals
+keeper mistakes
+```
+ 
+---
+ 
+### 6. National Team Performance Table Is Required
+ 
+Not optional.
+ 
+Need:
+ 
+### Static Strength
+ 
+```text
+FIFA rank
+Elo
+squad value
+average age
+coach
+confederation
+```
+ 
+### Dynamic Form
+ 
+```text
+wins
+draws
+losses
+goals
+goals against
+xG
+xGA
+clean sheets
+BTTS
+```
+ 
+Plus recent form windows.
+ 
+---
+ 
+### 7. Metrics Audit Findings
+ 
+Current available metrics already cover much of what we need. 
+ 
+Important groups:
+ 
+### Attacking
+ 
+```text
+goals
+assists
+shots
+shots on target
+xG
+big chances
+chances created
+touches in box
+```
+ 
+### Defensive
+ 
+```text
+tackles
+interceptions
+blocks
+duels won
+recoveries
+```
+ 
+### Possession
+ 
+```text
+passes
+pass accuracy
+possession
+```
+ 
+### Discipline
+ 
+```text
+yellow cards
+red cards
+fouls
+offsides
+```
+ 
+### Goalkeeping
+ 
+```text
+saves
+save %
+clean sheets
+xG conceded
+```
+ 
+---
+ 
+### 8. Fantasy Ownership Data
+ 
+Important but postponed.
+ 
+Need eventually:
+ 
+```text
+ownership %
+captain %
+vice captain %
+transfers in
+transfers out
+```
+ 
+Source likely FIFA Fantasy API when available. 
+ 
+---
+ 
+# Agreed Build Order
+ 
+## Phase 1
+ 
+```text
+wc26_nations
+wc26_stadiums
+referee_master
+referee_profile
+wc26_matches
+referee_assignments
+```
+ 
+---
+ 
+## Phase 2
+ 
+```text
+stadium_weather_daily
+nation_strength
+nation_form
+```
+ 
+---
+ 
+## Phase 3
+ 
+```text
+wc26_players
+player_metrics
+```
+ 
+---
+ 
+## Phase 4
+ 
+```text
+odds
+fantasy ownership
+optimizer
+```
+ 
+---
+ 
+# Before Notebook 01
+ 
+There is one thing still unresolved:
+ 
+### Nation Source of Truth
+ 
+Need to decide whether the master list originates from:
+ 
+```text
+FIFA
+ESPN
+FotMob
+Sofascore
+```
+ 
+My recommendation:
+ 
+```text
+FIFA = Primary Key Layer
+ESPN/FotMob/Sofascore = Alias Layer
+```

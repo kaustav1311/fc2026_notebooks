@@ -1,0 +1,47 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Warehouse repo .gitignore
+#
+# Principle: only commit the SOURCE of the pipeline (notebooks, lib/, scripts,
+# seeds, overrides, docs). Everything else is regenerable from upstream APIs
+# and lives on disk between runs (locally or in the GHA Actions cache).
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── ephemeral data ───────────────────────────────────────────────────────────
+# Raw upstream API caches — 800MB+ and growing. Restored from GHA cache between
+# runs; never in git.
+data/raw/
+
+# Pipeline outputs (parquets + CSVs + emitted JSON). Regenerable from data/raw/
+# via refresh.py. The PWA gets these via the GHA workflow pushing JSONs to the
+# PWA repo, not via this repo.
+data/processed/
+
+# Event-state files for the per-tick "what's newly finished" gating. Restored
+# from GHA cache between runs.
+data/.event_state.json
+data/.last_daily_run
+
+# ── python / jupyter byproducts ──────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+.ipynb_checkpoints/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ── virtualenvs / IDE ────────────────────────────────────────────────────────
+.venv/
+venv/
+.env
+.env.local
+.vscode/
+.idea/
+.DS_Store
+
+# ── notebook execution outputs ──────────────────────────────────────────────
+# refresh.py re-executes notebooks in place and writes outputs back. We DON'T
+# commit those (they'd be massive churn on every run); strip with nbstripout
+# locally before committing notebook edits. The GHA runner doesn't commit
+# notebooks back at all — only pushes JSON to the PWA repo.
+# (Notebooks themselves are tracked; this is just a reminder.)

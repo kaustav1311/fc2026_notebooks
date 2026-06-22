@@ -1,0 +1,166 @@
+name: warehouse refresh
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Runs refresh.py + _emit_pwa_json.py on a schedule, then pushes the freshly
+# emitted JSONs into the PWA repo (kaustav1311/fifawc2026 → public/data/).
+# Vercel auto-redeploys on that push.
+#
+# Cadence:
+#   • Hourly cron `0 * * * *` always fires. Inside the tournament window
+#     (2026-06-11 → 2026-07-20), refresh.py picks the hourly bucket (or
+#     hourly + daily on the first tick at-or-after 07:00 UTC each day).
+#     Outside the window, refresh.py exits early with no work (~5 sec run).
+#   • workflow_dispatch lets you trigger manually, optionally with a bucket
+#     override (hourly / daily / all / frozen) for one-off re-builds.
+#
+# Efficiency:
+#   • data/raw/ + data/processed/ + .event_state.json are restored from the
+#     Actions cache at run start and saved back at run end. This keeps the
+#     event-driven gating in REFRESH.md effective — typical tick is 30–150
+#     upstream fetches, not 3000.
+#   • The first run will be a cold start (no cache hit, ~15–25 min). Every
+#     subsequent run reuses the cache and finishes in ~2–4 min.
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  schedule:
+    - cron: '0 * * * *'
+  workflow_dispatch:
+    inputs:
+      bucket:
+        description: 'Override bucket (leave empty for auto; or hourly / daily / all / frozen)'
+        required: false
+        default: ''
+        type: string
+      force_refresh:
+        description: 'Force re-fetch ignoring cached payloads'
+        required: false
+        default: false
+        type: boolean
+
+# One refresh at a time — if a prior run is still going, skip rather than
+# stacking up parallel pulls against the same upstream APIs.
+concurrency:
+  group: warehouse-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    permissions:
+      contents: read
+
+    steps:
+      # ── 1. Source code ────────────────────────────────────────────────────
+      - name: Checkout warehouse repo
+        uses: actions/checkout@v4
+
+      # ── 2. Python ─────────────────────────────────────────────────────────
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          # nbclient executes notebooks via a "python3" kernel — needs ipykernel.
+          pip install ipykernel
+          python -m ipykernel install --user --name python3 --display-name "Python 3"
+
+      # ── 3. Restore the raw/processed/event-state cache ────────────────────
+      # Cache key includes the run id so each run writes a unique entry;
+      # restore-keys do a prefix match to pick the most recent cache. Old
+      # entries get evicted by GHA's 7-day-no-access policy.
+      - name: Restore warehouse cache
+        id: cache-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            data/raw
+            data/processed
+            data/.event_state.json
+            data/.last_daily_run
+          key: warehouse-cache-${{ github.run_id }}
+          restore-keys: |
+            warehouse-cache-
+
+      - name: Report cache state
+        run: |
+          echo "Cache restored from: ${{ steps.cache-restore.outputs.cache-matched-key || 'NONE (cold start)' }}"
+          echo "data/raw exists: $(test -d data/raw && echo yes || echo no)"
+          echo "data/processed exists: $(test -d data/processed && echo yes || echo no)"
+          echo "event_state exists: $(test -f data/.event_state.json && echo yes || echo no)"
+
+      # ── 4. Refresh — runs refresh.py with optional bucket override ────────
+      - name: Run refresh.py
+        run: |
+          ARGS=""
+          if [ -n "${{ inputs.bucket }}" ]; then
+            ARGS="$ARGS --bucket ${{ inputs.bucket }}"
+          fi
+          if [ "${{ inputs.force_refresh }}" = "true" ]; then
+            ARGS="$ARGS --force-refresh"
+          fi
+          echo "Running: python refresh.py $ARGS"
+          python refresh.py $ARGS
+
+      # ── 5. Emit JSON for the PWA ──────────────────────────────────────────
+      - name: Emit PWA JSON
+        run: |
+          if [ ! -d data/processed ] || [ -z "$(ls -A data/processed 2>/dev/null)" ]; then
+            echo "data/processed is empty (refresh.py probably exited early — out of tournament window or no work)."
+            echo "Skipping emit + push."
+            echo "SKIP_PUSH=1" >> $GITHUB_ENV
+            exit 0
+          fi
+          python _emit_pwa_json.py
+          ls -la data/processed/json/
+
+      # ── 6. Push emitted JSON to the PWA repo ──────────────────────────────
+      # Uses a fine-grained PAT (secret PWA_REPO_PAT) scoped to the PWA repo,
+      # with contents:write. We clone shallow, drop in the new files, commit
+      # only if anything actually changed, and push. Vercel picks it up.
+      - name: Push JSON to PWA repo
+        if: env.SKIP_PUSH != '1'
+        env:
+          PWA_PAT: ${{ secrets.PWA_REPO_PAT }}
+          PWA_REPO: kaustav1311/fifawc2026
+        run: |
+          if [ -z "$PWA_PAT" ]; then
+            echo "ERROR: PWA_REPO_PAT secret is not set. See SETUP.md."
+            exit 1
+          fi
+          git clone --depth 1 "https://x-access-token:${PWA_PAT}@github.com/${PWA_REPO}.git" pwa
+          mkdir -p pwa/public/data
+          cp data/processed/json/*.json pwa/public/data/
+          cd pwa
+          git config user.name "wc26-refresh-bot"
+          git config user.email "wc26-refresh-bot@users.noreply.github.com"
+          git add public/data/
+          if git diff --cached --quiet; then
+            echo "No JSON changes vs PWA HEAD — nothing to commit."
+            exit 0
+          fi
+          STAMP="$(date -u +%Y-%m-%dT%H:%MZ)"
+          git commit -m "chore: warehouse refresh ${STAMP}"
+          git push
+          echo "Pushed updated JSONs to ${PWA_REPO}. Vercel will redeploy."
+
+      # ── 7. Save the cache for next run ───────────────────────────────────
+      # Save unconditionally so even a partial run (e.g. refresh succeeded but
+      # emit failed) keeps the partially-updated raw cache for next tick.
+      - name: Save warehouse cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            data/raw
+            data/processed
+            data/.event_state.json
+            data/.last_daily_run
+          key: warehouse-cache-${{ github.run_id }}
