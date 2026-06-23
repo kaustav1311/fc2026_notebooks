@@ -252,7 +252,29 @@ jobs:
           fi
           STAMP="$(date -u +%Y-%m-%dT%H:%MZ)"
           git commit -m "chore: warehouse refresh ${STAMP}"
-          git push
+          # The PWA repo can move between this workflow's checkout step and the
+          # push: a manual commit lands, a concurrent workflow finishes, etc.
+          # Our commit only touches public/data/*.json (the warehouse-emitted
+          # snapshots) — nothing else in the PWA repo writes to that path — so
+          # a rebase is safe and will only conflict if two concurrent runs of
+          # THIS workflow raced (which the `concurrency: warehouse-refresh`
+          # group already serializes). Retry once after a fetch+rebase so a
+          # stale local main on the runner doesn't fail the whole tick.
+          push_with_rebase() {
+            for attempt in 1 2 3; do
+              if git push; then return 0; fi
+              echo "::notice::Push rejected (attempt ${attempt}). Fetching and rebasing onto origin/main."
+              git fetch origin main
+              git rebase origin/main || {
+                echo "::error::Rebase produced a conflict — bailing out so we don't clobber upstream."
+                git rebase --abort || true
+                return 1
+              }
+            done
+            echo "::error::Still rejected after 3 attempts."
+            return 1
+          }
+          push_with_rebase
           echo "Pushed updated JSONs to kaustav1311/fifawc2026. Vercel will redeploy."
 
       # ── 7. Save the cache for next run ───────────────────────────────────

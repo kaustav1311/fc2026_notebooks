@@ -118,19 +118,46 @@ def resolve_notebook(needle: str) -> Path:
     return candidates[0]
 
 
-def run_notebook(nb_path: Path, *, force_refresh: bool = False) -> None:
+def run_notebook(
+    nb_path: Path,
+    *,
+    force_refresh: bool = False,
+    force_all_events: bool = False,
+) -> None:
     import nbformat
     from nbclient import NotebookClient
 
-    print(f"[run] {nb_path.name}{' (force_refresh)' if force_refresh else ''}")
+    flags = []
+    if force_refresh:
+        flags.append("force_refresh")
+    if force_all_events:
+        flags.append("force_all_events")
+    suffix = f" ({', '.join(flags)})" if flags else ""
+    print(f"[run] {nb_path.name}{suffix}")
+
+    # FORCE_REFRESH and FORCE_ALL_EVENTS are intentionally separate.
+    #   FORCE_REFRESH=1     — bypass disk cache; re-fetch the URL.
+    #   FORCE_ALL_EVENTS=1  — bypass event-driven gating; treat every finished
+    #                         match as newly-finished. This is expensive — on
+    #                         nb_08 it expands the per-player TM-history sweep
+    #                         from ~30 players to ~1200, taking 30+ min.
+    # Auto-force-in-tournament-window sets only FORCE_REFRESH (we need fresh
+    # data but should still let event-gating trim the per-player work). The
+    # user-explicit --force-refresh CLI flag sets both, because that's an
+    # intentional full sweep.
     if force_refresh:
         os.environ["FORCE_REFRESH"] = "1"
-        # FORCE_ALL_EVENTS=1 makes lib/events helpers return the full universe
-        # so notebooks re-fetch every player/team/ref regardless of state file.
+    else:
+        os.environ.pop("FORCE_REFRESH", None)
+    if force_all_events:
         os.environ["FORCE_ALL_EVENTS"] = "1"
+    else:
+        os.environ.pop("FORCE_ALL_EVENTS", None)
 
     nb = nbformat.read(str(nb_path), as_version=4)
-    NotebookClient(nb, timeout=1800, kernel_name="python3").execute()
+    # 45 min per cell — covers nb_08's TM-history sweep on a cold cache when
+    # event-gating legitimately needs to fetch all players (--force-refresh).
+    NotebookClient(nb, timeout=2700, kernel_name="python3").execute()
     nbformat.write(nb, str(nb_path))
 
 
@@ -168,8 +195,17 @@ def main(argv: list[str] | None = None) -> int:
     # we silently keep reading day-1 JSON. Auto-force unless the user opts out
     # by passing --no-force-refresh, or unless we're out of the live window.
     effective_force = args.force_refresh or (in_tournament_window(now) and not args.no_force_refresh)
+    # FORCE_ALL_EVENTS is the "do a full sweep regardless of event state" flag.
+    # Auto-force-in-tournament should NOT set this — event-gating is the whole
+    # point of the 2026-06-22 refactor (a typical tick fetches ~30 players,
+    # not 1200). Only the user-explicit `--force-refresh` CLI flag bypasses
+    # event-gating. `--bucket all` is a cold-bootstrap path and also gets the
+    # full sweep so daily notebooks populate raw cache for hourly ones.
+    effective_force_all_events = args.force_refresh or (args.bucket == "all")
     if effective_force and not args.force_refresh:
-        print("[refresh] in tournament window — auto-setting force_refresh=True")
+        print("[refresh] in tournament window — auto-setting force_refresh=True (event-gating stays on)")
+    if effective_force_all_events:
+        print("[refresh] force_all_events=True — full sweep, ignoring event state")
 
     print(f"[refresh] plan: {', '.join(t.name for t in targets)}")
     if args.dry_run:
@@ -178,7 +214,11 @@ def main(argv: list[str] | None = None) -> int:
     failures: list[str] = []
     for t in targets:
         try:
-            run_notebook(t, force_refresh=effective_force)
+            run_notebook(
+                t,
+                force_refresh=effective_force,
+                force_all_events=effective_force_all_events,
+            )
         except Exception as exc:  # one notebook failing shouldn't kill the bundle
             failures.append(f"{t.name}: {type(exc).__name__}: {exc}")
             print(f"[fail] {t.name}: {exc}")
