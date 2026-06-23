@@ -110,6 +110,45 @@ jobs:
           echo "data/processed exists: $(test -d data/processed && echo yes || echo no)"
           echo "event_state exists: $(test -f data/.event_state.json && echo yes || echo no)"
 
+      # ── 3.4. Stub FootyMetrics-dependent notebooks on GHA ────────────────
+      # footymetrics.com returns 403 to GHA runner IP ranges (UA in
+      # lib/http.py is already a browser UA — block is IP-based, not UA-
+      # based). Notebooks 04 and 05 are the only consumers of that source,
+      # and they don't need to run hourly anyway: the WC26 ref panel is
+      # static once the tournament starts. We replace those two notebooks
+      # with no-op stubs on the runner so refresh.py finishes cleanly. The
+      # committed data/processed/referee_*.parquet baseline stays in place;
+      # refresh nb_04/05 locally whenever you want fresher ref data and
+      # commit. The stubs only exist on the ephemeral runner — local files
+      # untouched, and the GHA cache saves data/* not *.ipynb so stubs
+      # never pollute subsequent runs either.
+      - name: Stub footymetrics-dependent notebooks
+        run: |
+          for nb in 04_referees 05_referee_assignments; do
+            cat > "${nb}.ipynb" <<'EOF'
+          {
+            "cells": [
+              {
+                "cell_type": "code",
+                "execution_count": null,
+                "metadata": {},
+                "source": [
+                  "print('[stub] Skipped on GHA — footymetrics.com blocks runner IPs.')\n",
+                  "print('[stub] Refresh this notebook locally and commit the resulting parquets.')"
+                ],
+                "outputs": []
+              }
+            ],
+            "metadata": {
+              "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"}
+            },
+            "nbformat": 4,
+            "nbformat_minor": 5
+          }
+          EOF
+          done
+          echo "Stubbed 04_referees.ipynb + 05_referee_assignments.ipynb for this run."
+
       # ── 3.5. Pre-create data/raw/ subdirs ────────────────────────────────
       # Notebook 01 writes directly to data/raw/transfermarkt/national_teams.csv
       # via Path.write_bytes(), which does NOT auto-create parent dirs. On a
