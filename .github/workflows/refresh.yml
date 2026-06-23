@@ -110,6 +110,26 @@ jobs:
           echo "data/processed exists: $(test -d data/processed && echo yes || echo no)"
           echo "event_state exists: $(test -f data/.event_state.json && echo yes || echo no)"
 
+      # ── 3.5. Pre-create data/raw/ subdirs ────────────────────────────────
+      # Notebook 01 writes directly to data/raw/transfermarkt/national_teams.csv
+      # via Path.write_bytes(), which does NOT auto-create parent dirs. On a
+      # local machine these dirs exist from prior runs; on a fresh GHA runner
+      # they don't. mkdir -p is a no-op when the cache restore already brought
+      # the dirs, so this is safe to run every tick.
+      - name: Pre-create data/raw subdirs
+        run: |
+          mkdir -p \
+            data/raw/transfermarkt \
+            data/raw/footymetrics \
+            data/raw/fotmob \
+            data/raw/polymarket \
+            data/raw/fifa \
+            data/raw/fifa_fantasy \
+            data/raw/fdh \
+            data/raw/espn \
+            data/raw/open_meteo \
+            data/raw/worldreferee
+
       # ── 4. Refresh — runs refresh.py with optional bucket override ────────
       # data/processed/ is committed as a bootstrap baseline, so a fresh
       # runner always has the upstream parquets (wc26_nations, wc26_matches,
@@ -143,7 +163,13 @@ jobs:
             ARGS="$ARGS --force-refresh"
           fi
           echo "Running: python refresh.py $ARGS  (AUDIT_APP_PATH=$AUDIT_APP_PATH)"
-          python refresh.py $ARGS
+          # refresh.py exits 1 if ANY notebook failed (per-notebook try/except
+          # in refresh.py already catches the exception, logs it, and keeps
+          # going through the rest). We tolerate that exit code so emit + push
+          # still run — the notebooks that succeeded have produced fresh
+          # parquets, and the ones that failed leave the committed baseline
+          # in place. Git diff at the push step decides what's actually new.
+          python refresh.py $ARGS || echo "::warning::refresh.py exited non-zero (some notebooks failed). Continuing to emit + push for the successful ones."
 
       # ── 5. Emit JSON for the PWA ──────────────────────────────────────────
       - name: Emit PWA JSON
