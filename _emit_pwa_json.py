@@ -41,6 +41,22 @@ EMIT: list[str] = [
     # (fantasy_players also has /api/fifa-fantasy live overlay).
     "wc26_stg_fantasy_player_totals",
     "fantasy_players",
+    # Round 2.3: the rich joined player view — identity + WC totals + recent
+    # windows + career rollups + market values + derived ratios. Powers
+    # PlayerDetailSheet (Basic-tab WC totals grid + Recent Form windows +
+    # Club + Nation tabs). ~8 MB JSON. nb_16 builds it from nb_07's
+    # wc26_player_match_stats_wide + nb_11's per-match aggregation + the
+    # career/value summary parquets — without it, the PWA's
+    # loadStgPlayerView stays pinned to an old local drop and player stats
+    # never refresh on cron.
+    "wc26_stg_players_view",
+    # Round 2.4: tournament-average per-player powerrank (DIFFERENT from
+    # wc26_player_match_powerrank above which is per-match). nb_14 builds
+    # it as a groupby mean over wc26_player_match_powerrank, one row per
+    # (fifa_player_id, fifa_team_id). Read by loadStgPlayerPowerrank →
+    # loadPowerrankIndex for FantasyTab rank chips + PlayerDetailSheet
+    # WC totals section rank chips.
+    "wc26_stg_player_powerrank",
 ]
 
 # Slim emit: only a subset of columns for very wide tables. wc26_stg_players is
