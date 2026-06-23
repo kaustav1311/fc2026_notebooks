@@ -57,6 +57,20 @@ jobs:
       - name: Checkout warehouse repo
         uses: actions/checkout@v4
 
+      # The notebooks read hand-curated seeds out of the PWA repo
+      # (src/data/teams.ts, fixtures.ts, venues.ts, espnAbbrIso.ts, and
+      # services/espn.ts) — see lib/seed_loader.py. We check the PWA repo out
+      # alongside the warehouse here and point AUDIT_APP_PATH at it later.
+      # Same checkout is reused at the end of the workflow to commit + push
+      # the freshly-emitted JSONs back, so we get cross-repo seed + push for
+      # the price of one clone.
+      - name: Checkout PWA repo (for seeds + JSON push)
+        uses: actions/checkout@v4
+        with:
+          repository: kaustav1311/fifawc2026
+          path: pwa-repo
+          token: ${{ secrets.PWA_REPO_PAT }}
+
       # ── 2. Python ─────────────────────────────────────────────────────────
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -101,7 +115,11 @@ jobs:
       # runner always has the upstream parquets (wc26_nations, wc26_matches,
       # referee_master, …) on disk before the hourly notebooks try to load
       # them. refresh.py then overwrites with fresher versions during the run.
+      # AUDIT_APP_PATH points lib/seed_loader.py at the PWA checkout above so
+      # notebooks 01/02/03 can re-parse teams.ts / venues.ts / fixtures.ts.
       - name: Run refresh.py
+        env:
+          AUDIT_APP_PATH: ${{ github.workspace }}/pwa-repo
         run: |
           ARGS=""
           if [ -n "${{ inputs.bucket }}" ]; then
@@ -110,7 +128,7 @@ jobs:
           if [ "${{ inputs.force_refresh }}" = "true" ]; then
             ARGS="$ARGS --force-refresh"
           fi
-          echo "Running: python refresh.py $ARGS"
+          echo "Running: python refresh.py $ARGS  (AUDIT_APP_PATH=$AUDIT_APP_PATH)"
           python refresh.py $ARGS
 
       # ── 5. Emit JSON for the PWA ──────────────────────────────────────────
@@ -126,23 +144,19 @@ jobs:
           ls -la data/processed/json/
 
       # ── 6. Push emitted JSON to the PWA repo ──────────────────────────────
-      # Uses a fine-grained PAT (secret PWA_REPO_PAT) scoped to the PWA repo,
-      # with contents:write. We clone shallow, drop in the new files, commit
-      # only if anything actually changed, and push. Vercel picks it up.
+      # Reuses the pwa-repo/ checkout from step 1 (same PAT, same working
+      # copy). Drop new files in, commit only if anything changed, push.
+      # Vercel picks it up on the next webhook.
       - name: Push JSON to PWA repo
         if: env.SKIP_PUSH != '1'
-        env:
-          PWA_PAT: ${{ secrets.PWA_REPO_PAT }}
-          PWA_REPO: kaustav1311/fifawc2026
         run: |
-          if [ -z "$PWA_PAT" ]; then
-            echo "ERROR: PWA_REPO_PAT secret is not set. See SETUP.md."
+          if [ ! -d pwa-repo ]; then
+            echo "ERROR: pwa-repo/ checkout missing. PWA_REPO_PAT probably wasn't set on the early checkout."
             exit 1
           fi
-          git clone --depth 1 "https://x-access-token:${PWA_PAT}@github.com/${PWA_REPO}.git" pwa
-          mkdir -p pwa/public/data
-          cp data/processed/json/*.json pwa/public/data/
-          cd pwa
+          mkdir -p pwa-repo/public/data
+          cp data/processed/json/*.json pwa-repo/public/data/
+          cd pwa-repo
           git config user.name "wc26-refresh-bot"
           git config user.email "wc26-refresh-bot@users.noreply.github.com"
           git add public/data/
@@ -153,7 +167,7 @@ jobs:
           STAMP="$(date -u +%Y-%m-%dT%H:%MZ)"
           git commit -m "chore: warehouse refresh ${STAMP}"
           git push
-          echo "Pushed updated JSONs to ${PWA_REPO}. Vercel will redeploy."
+          echo "Pushed updated JSONs to kaustav1311/fifawc2026. Vercel will redeploy."
 
       # ── 7. Save the cache for next run ───────────────────────────────────
       # Save unconditionally so even a partial run (e.g. refresh succeeded but

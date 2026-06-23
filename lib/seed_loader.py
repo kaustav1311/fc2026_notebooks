@@ -5,10 +5,14 @@ through. Parsers are deliberately regex-based and tolerant: they reject lines
 that don't match the expected shape rather than blowing up the whole load.
 """
 from __future__ import annotations
+import os
 import re
 from pathlib import Path
 
-AUDIT_APP = Path("E:/fifawc2026")
+# Allow override via env var for CI (the GHA workflow checks the PWA repo out
+# at $GITHUB_WORKSPACE/pwa-repo and exports AUDIT_APP_PATH to that path).
+# Local dev keeps working without setting anything via the default below.
+AUDIT_APP = Path(os.environ.get("AUDIT_APP_PATH", "E:/fifawc2026"))
 TEAMS_TS = AUDIT_APP / "src" / "data" / "teams.ts"
 VENUES_TS = AUDIT_APP / "src" / "data" / "venues.ts"
 FIXTURES_TS = AUDIT_APP / "src" / "data" / "fixtures.ts"
