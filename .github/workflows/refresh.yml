@@ -47,7 +47,7 @@ concurrency:
 jobs:
   refresh:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
 
     permissions:
       contents: read
@@ -97,11 +97,23 @@ jobs:
           echo "event_state exists: $(test -f data/.event_state.json && echo yes || echo no)"
 
       # ── 4. Refresh — runs refresh.py with optional bucket override ────────
+      # Cold-start handling: the hourly notebooks (03_matches, 05_…, etc.)
+      # depend on outputs from the frozen bucket (wc26_nations, wc26_stadiums)
+      # and the daily bucket (referee_master, wc26_player_enrichment, …). On a
+      # fresh runner with no warm cache those upstream parquets don't exist,
+      # so every hourly notebook that loads them raises FileNotFoundError.
+      # Detect this by checking for wc26_nations.parquet (the canonical "have
+      # the frozen tables been built?" sentinel) and bootstrap with
+      # --bucket all on cold starts. Once the cache is warm, normal cadence
+      # resumes.
       - name: Run refresh.py
         run: |
           ARGS=""
           if [ -n "${{ inputs.bucket }}" ]; then
             ARGS="$ARGS --bucket ${{ inputs.bucket }}"
+          elif [ ! -f data/processed/wc26_nations.parquet ] && [ ! -f data/processed/wc26_nations.csv ]; then
+            echo "::notice::Cold start detected (no wc26_nations table on disk). Bootstrapping with --bucket all — this run will take 30-50 min; subsequent cached runs will be 2-4 min."
+            ARGS="$ARGS --bucket all"
           fi
           if [ "${{ inputs.force_refresh }}" = "true" ]; then
             ARGS="$ARGS --force-refresh"
