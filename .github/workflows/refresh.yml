@@ -47,7 +47,7 @@ concurrency:
 jobs:
   refresh:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
 
     permissions:
       contents: read
@@ -117,6 +117,16 @@ jobs:
       # them. refresh.py then overwrites with fresher versions during the run.
       # AUDIT_APP_PATH points lib/seed_loader.py at the PWA checkout above so
       # notebooks 01/02/03 can re-parse teams.ts / venues.ts / fixtures.ts.
+      #
+      # Cold-cache bootstrap: the hourly notebooks 05 (refs assignments) and
+      # 11 (FotMob WC/form) READ raw HTML/JSON files in data/raw/footymetrics/
+      # and data/raw/fotmob/ that are produced by the daily notebooks 04 and
+      # 08. Hourly cron doesn't run those. So on a cold runner with no warm
+      # data/raw/ cache, the hourly bundle alone leaves nb_05 and nb_11 with
+      # empty inputs → KeyError. Detect missing raw subdirs and run --bucket
+      # all (frozen + daily + hourly) on that tick so the daily notebooks
+      # populate data/raw/ before the hourly ones read it. Subsequent runs
+      # with a warm cache use the normal hourly bundle.
       - name: Run refresh.py
         env:
           AUDIT_APP_PATH: ${{ github.workspace }}/pwa-repo
@@ -124,6 +134,10 @@ jobs:
           ARGS=""
           if [ -n "${{ inputs.bucket }}" ]; then
             ARGS="$ARGS --bucket ${{ inputs.bucket }}"
+          elif [ ! -d data/raw/footymetrics ] || [ -z "$(ls -A data/raw/footymetrics 2>/dev/null)" ] \
+               || [ ! -d data/raw/fotmob ] || [ -z "$(ls -A data/raw/fotmob 2>/dev/null)" ]; then
+            echo "::notice::Cold cache detected (data/raw/footymetrics or data/raw/fotmob empty). Bootstrapping with --bucket all so the daily notebooks (04, 08) populate the raw cache before the hourly ones read it. This run will take 30-50 min; subsequent cached runs go back to 2-4 min hourly."
+            ARGS="$ARGS --bucket all"
           fi
           if [ "${{ inputs.force_refresh }}" = "true" ]; then
             ARGS="$ARGS --force-refresh"
@@ -172,8 +186,12 @@ jobs:
       # ── 7. Save the cache for next run ───────────────────────────────────
       # Save unconditionally so even a partial run (e.g. refresh succeeded but
       # emit failed) keeps the partially-updated raw cache for next tick.
+      # continue-on-error: a benign "cache already exists" warning from the
+      # Actions service shouldn't mark the whole run as failed — the saved
+      # cache is still usable on the next tick.
       - name: Save warehouse cache
         if: always()
+        continue-on-error: true
         uses: actions/cache/save@v4
         with:
           path: |
