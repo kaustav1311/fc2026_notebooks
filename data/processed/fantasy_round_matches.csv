@@ -39,10 +39,10 @@ round_id,fantasy_match_id,venue_id,venue_name,venue_city,date,status,period,minu
 2,38,4,Sofi Stadium,"Inglewood, California",2026-06-21T20:00:00+01:00,complete,full_time,96,0,False,5,Belgium,23,IR Iran,0.0,0.0
 2,39,15,Hard Rock Stadium,"Miami Gardens, Florida",2026-06-21T23:00:00+01:00,complete,full_time,99,0,False,46,Uruguay,8,Cabo Verde,2.0,2.0
 2,40,8,Bc Place,Vancouver,2026-06-22T02:00:00+01:00,complete,full_time,101,0,False,31,New Zealand,17,Egypt,1.0,3.0
-2,41,10,At&t Stadium,"Arlington, Texas",2026-06-22T18:00:00+01:00,scheduled,pre_match,0,0,False,2,Argentina,4,Austria,,
-2,42,11,Lincoln Financial Field,"Philadelphia, Pennsylvania",2026-06-22T22:00:00+01:00,scheduled,pre_match,0,0,False,19,France,24,Iraq,,
-2,43,6,Metlife Stadium,"East Rutherford, New Jersey",2026-06-23T01:00:00+01:00,scheduled,pre_match,0,0,False,32,Norway,39,Senegal,,
-2,44,5,Levi's Stadium,"Santa Clara, California",2026-06-23T04:00:00+01:00,scheduled,pre_match,0,0,False,26,Jordan,1,Algeria,,
+2,41,10,At&t Stadium,"Arlington, Texas",2026-06-22T18:00:00+01:00,complete,full_time,98,0,False,2,Argentina,4,Austria,2.0,0.0
+2,42,11,Lincoln Financial Field,"Philadelphia, Pennsylvania",2026-06-22T22:00:00+01:00,complete,full_time,93,0,False,19,France,24,Iraq,3.0,0.0
+2,43,6,Metlife Stadium,"East Rutherford, New Jersey",2026-06-23T01:00:00+01:00,complete,full_time,101,0,False,32,Norway,39,Senegal,3.0,2.0
+2,44,5,Levi's Stadium,"Santa Clara, California",2026-06-23T04:00:00+01:00,playing,second_half,52,0,False,26,Jordan,1,Algeria,1.0,0.0
 2,45,9,Nrg Stadium,"Houston, Texas",2026-06-23T18:00:00+01:00,scheduled,pre_match,0,0,False,35,Portugal,48,Uzbekistan,,
 2,46,7,Gillette Stadium,"Foxborough, Massachusetts",2026-06-23T21:00:00+01:00,scheduled,pre_match,0,0,False,18,England,21,Ghana,,
 2,47,3,Bmo Field,Toronto,2026-06-24T00:00:00+01:00,scheduled,pre_match,0,0,False,33,Panama,13,Croatia,,
