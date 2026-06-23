@@ -196,6 +196,51 @@ if len(stats_df):
     io.save_table(stats_df, "wc26_player_match_stats")
 if len(power_df):
     io.save_table(power_df, "wc26_player_match_powerrank")
+""")
+
+md("""## 4. Pivot long → wide
+
+`wc26_player_match_stats_wide` is the table nb_16 reads to build the `fifa_wc_*`
+aggregate block on `wc26_stg_players` / `wc26_stg_players_view`. The pivot lives
+here (not in a standalone script) so the long and wide tables always land on
+the same tick — otherwise newly-finished matches sit in the long table but
+never reach the staging view.""")
+
+code("""# One row per (fifa_match_id, fifa_player_id) × ~55 allowlisted stat columns.
+# Re-attach a small context join from wc26_matches + wc26_players so the wide
+# table is directly slice-able by nb_16 (which needs nation_id, home/away
+# nation_id and stage) without an extra round-trip to the source parquets.
+if len(stats_df):
+    wide = stats_df.pivot_table(
+        index=["fifa_match_id", "fifa_id_ifes", "fifa_player_id"],
+        columns="stat_name",
+        values="value",
+        aggfunc="first",
+    ).reset_index()
+    wide.columns.name = None
+
+    matches_ctx = matches[["fifa_match_id", "match_number", "stage",
+                           "kickoff_utc", "home_nation_id", "away_nation_id",
+                           "espn_match_id"]].copy()
+    matches_ctx["fifa_match_id"] = matches_ctx["fifa_match_id"].astype(str)
+    wide["fifa_match_id"] = wide["fifa_match_id"].astype(str)
+    wide = wide.merge(matches_ctx, on="fifa_match_id", how="left")
+
+    players_ctx = io.load_table("wc26_players")[
+        ["fifa_player_id", "nation_id", "name", "position", "real_position", "jersey_num"]
+    ].copy()
+    wide = wide.merge(players_ctx, on="fifa_player_id", how="left")
+
+    key_cols = ["fifa_match_id", "fifa_id_ifes", "espn_match_id", "match_number",
+                "stage", "kickoff_utc", "home_nation_id", "away_nation_id",
+                "fifa_player_id", "name", "nation_id", "position", "real_position", "jersey_num"]
+    stat_cols = sorted(c for c in wide.columns if c not in key_cols)
+    wide = wide[key_cols + stat_cols]
+
+    io.save_table(wide, "wc26_player_match_stats_wide")
+    print(f"wide: {len(wide):,} rows × {len(wide.columns)} cols")
+else:
+    print("no stats rows this tick — wide pivot skipped (existing wide parquet retained)")
 
 events.save()
 print("event-state committed")
