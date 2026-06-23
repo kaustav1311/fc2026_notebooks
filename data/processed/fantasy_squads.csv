@@ -1,0 +1,49 @@
+fantasy_squad_id,name,group,abbr,is_eliminated
+1,Algeria,j,ALG,False
+2,Argentina,j,ARG,False
+3,Australia,d,AUS,False
+4,Austria,j,AUT,False
+5,Belgium,g,BEL,False
+6,Bosnia and Herzegovina,b,BIH,False
+7,Brazil,c,BRA,False
+8,Cabo Verde,h,CPV,False
+9,Canada,b,CAN,False
+10,Colombia,k,COL,False
+11,Congo DR,k,COD,False
+12,Côte d'Ivoire,e,CIV,False
+13,Croatia,l,CRO,False
+14,Curaçao,e,CUW,False
+15,Czechia,a,CZE,False
+16,Ecuador,e,ECU,False
+17,Egypt,g,EGY,False
+18,England,l,ENG,False
+19,France,i,FRA,False
+20,Germany,e,GER,False
+21,Ghana,l,GHA,False
+22,Haiti,c,HAI,False
+23,IR Iran,g,IRN,False
+24,Iraq,i,IRQ,False
+25,Japan,f,JPN,False
+26,Jordan,j,JOR,False
+27,Korea Republic,a,KOR,False
+28,Mexico,a,MEX,False
+29,Morocco,c,MAR,False
+30,Netherlands,f,NED,False
+31,New Zealand,g,NZL,False
+32,Norway,i,NOR,False
+33,Panama,l,PAN,False
+34,Paraguay,d,PAR,False
+35,Portugal,k,POR,False
+36,Qatar,b,QAT,False
+37,Saudi Arabia,h,KSA,False
+38,Scotland,c,SCO,False
+39,Senegal,i,SEN,False
+40,South Africa,a,RSA,False
+41,Spain,h,ESP,False
+42,Sweden,f,SWE,False
+43,Switzerland,b,SUI,False
+44,Tunisia,f,TUN,False
+45,Türkiye,d,TUR,False
+46,Uruguay,h,URU,False
+47,USA,d,USA,False
+48,Uzbekistan,k,UZB,False

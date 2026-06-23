@@ -1,0 +1,49 @@
+nation_id,seed_name,iso_alpha2,confederation,group,pot,fifa_rank,squad_valuation_m_eur,is_host,espn_team_id,espn_name,espn_abbreviation,fotmob_team_id,fotmob_name,fotmob_short_name,tm_team_id,tm_name,tm_code,tm_slug,stars,all_names
+MEX,Mexico,mx,CONCACAF,A,1,14,240,True,203,Mexico,MEX,6710,Mexico,Mexico,6303.0,Mexico,MEX1,mexico,"['Santiago Giménez', 'Edson Álvarez', 'Hirving Lozano']",['Mexico']
+KOR,South Korea,kr,AFC,A,2,23,250,False,451,South Korea,KOR,7804,South Korea,South Korea,3589.0,South Korea,RSK1,south-korea,"['Son Heung-min', 'Kim Min-jae', 'Lee Kang-in']","['South Korea', 'south korea', 'korea republic', 'republic of korea', 'korea south']"
+CZE,Czechia,cz,UEFA,A,3,42,220,False,450,Czechia,CZE,8496,Czechia,Czechia,3445.0,Czech Republic,TS1,czech-republic,"['Patrik Schick', 'Tomáš Souček', 'Adam Hložek']","['Czechia', 'Czech Republic', 'czechia', 'czech republic']"
+RSA,South Africa,za,CAF,A,4,58,65,False,467,South Africa,RSA,6316,South Africa,South Africa,3806.0,South Africa,SFA1,south-africa,"['Ronwen Williams', 'Percy Tau', 'Themba Zwane']","['South Africa', 'south africa']"
+CAN,Canada,ca,CONCACAF,B,1,31,230,True,206,Canada,CAN,5810,Canada,Canada,3510.0,Canada,CDN1,canada,"['Alphonso Davies', 'Jonathan David', 'Tajon Buchanan']",['Canada']
+SUI,Switzerland,ch,UEFA,B,2,19,270,False,475,Switzerland,SUI,6717,Switzerland,Switzerland,3384.0,Switzerland,C1,switzerland,"['Granit Xhaka', 'Manuel Akanji', 'Breel Embolo']",['Switzerland']
+BIH,Bosnia & Herzegovina,ba,UEFA,B,3,55,130,False,452,Bosnia-Herzegovina,BIH,10106,Bosnia and Herzegovina,Bosnia and Herzegovina,3446.0,Bosnia-Herzegovina,BOS1,bosnia-herzegovina,"['Edin Džeko', 'Ermedin Demirović', 'Anel Ahmedhodžić']","['Bosnia & Herzegovina', 'Bosnia-Herzegovina', 'Bosnia and Herzegovina', 'bosnia herzegovina', 'bosnia and herzegovina', 'bosnia & herzegovina']"
+QAT,Qatar,qa,AFC,B,4,35,60,False,4398,Qatar,QAT,5902,Qatar,Qatar,14162.0,Qatar,QSL,qatar,"['Akram Afif', 'Almoez Ali', 'Hassan Al-Haydos']",['Qatar']
+BRA,Brazil,br,CONMEBOL,C,1,5,1050,False,205,Brazil,BRA,8256,Brazil,Brazil,3439.0,Brazil,BRA1,brazil,"['Vinícius Jr', 'Rodrygo', 'Raphinha']",['Brazil']
+MAR,Morocco,ma,CAF,C,2,12,360,False,2869,Morocco,MAR,6262,Morocco,Morocco,3575.0,Morocco,MAR1,morocco,"['Achraf Hakimi', 'Brahim Díaz', 'Hakim Ziyech']",['Morocco']
+SCO,Scotland,gb-sct,UEFA,C,3,44,200,False,580,Scotland,SCO,8498,Scotland,Scotland,3380.0,Scotland,SC1,scotland,"['Scott McTominay', 'John McGinn', 'Andy Robertson']",['Scotland']
+HAI,Haiti,ht,CONCACAF,C,4,82,20,False,2654,Haiti,HAI,5934,Haiti,Haiti,14161.0,Haiti,HAI,haiti,"['Frantzdy Pierrot', 'Derrick Etienne Jr.']",['Haiti']
+USA,United States,us,CONCACAF,D,1,16,320,True,660,United States,USA,6713,USA,USA,3505.0,United States,MLS1,united-states,"['Christian Pulisic', 'Weston McKennie', 'Gio Reyna']","['United States', 'USA', 'united states', 'usa', 'united states of america']"
+TUR,Türkiye,tr,UEFA,D,2,28,420,False,465,Türkiye,TUR,6595,Turkiye,Turkiye,3381.0,Turkiye,TR1,turkiye,"['Arda Güler', 'Hakan Çalhanoğlu', 'Barış Alper Yılmaz']","['Türkiye', 'Turkiye', 'turkiye', 'türkiye', 'turkey']"
+AUS,Australia,au,AFC,D,3,24,90,False,628,Australia,AUS,6716,Australia,Australia,3433.0,Australia,AUS1,australia,"['Mathew Ryan', 'Jackson Irvine', 'Mitchell Duke']",['Australia']
+PAR,Paraguay,py,CONMEBOL,D,4,56,90,False,210,Paraguay,PAR,6724,Paraguay,Paraguay,3581.0,Paraguay,PR1A,paraguay,"['Miguel Almirón', 'Julio Enciso']",['Paraguay']
+GER,Germany,de,UEFA,E,1,9,1000,False,481,Germany,GER,8570,Germany,Germany,3262.0,Germany,L1,germany,"['Florian Wirtz', 'Jamal Musiala', 'Kai Havertz']",['Germany']
+ECU,Ecuador,ec,CONMEBOL,E,2,22,280,False,209,Ecuador,ECU,6707,Ecuador,Ecuador,5750.0,Ecuador,EC1N,ecuador,"['Moisés Caicedo', 'Pervis Estupiñán', 'Kendry Páez']",['Ecuador']
+CIV,Ivory Coast,ci,CAF,E,3,40,300,False,4789,Ivory Coast,CIV,6709,Ivory Coast,Ivory Coast,3591.0,Ivory Coast,CIV,elfenbeinkuste,"['Sébastien Haller', 'Simon Adingra', 'Franck Kessié']","['Ivory Coast', 'cote d ivoire', ""côte d'ivoire"", 'ivory coast']"
+CUW,Curaçao,cw,CONCACAF,E,4,88,15,False,11678,Curaçao,CUW,287981,Curacao,Curacao,32364.0,Curaçao,CUW,curacao,"['Jarchinio Antonia', 'Rangelo Janga']","['Curaçao', 'Curacao']"
+NED,Netherlands,nl,UEFA,F,1,7,980,False,449,Netherlands,NED,6708,Netherlands,Netherlands,3379.0,Netherlands,NL1,netherlands,"['Virgil van Dijk', 'Cody Gakpo', 'Frenkie de Jong']",['Netherlands']
+JPN,Japan,jp,AFC,F,2,17,320,False,627,Japan,JPN,6715,Japan,Japan,3435.0,Japan,JAP1,japan,"['Takefusa Kubo', 'Kaoru Mitoma', 'Wataru Endō']",['Japan']
+TUN,Tunisia,tn,CAF,F,3,49,70,False,659,Tunisia,TUN,6719,Tunisia,Tunisia,3670.0,Tunisia,TUN1,tunisia,"['Hannibal Mejbri', 'Youssef Msakni']",['Tunisia']
+SWE,Sweden,se,UEFA,F,4,20,350,False,466,Sweden,SWE,8520,Sweden,Sweden,3557.0,Sweden,SE1,sweden,"['Alexander Isak', 'Viktor Gyökeres', 'Dejan Kulusevski']",['Sweden']
+BEL,Belgium,be,UEFA,G,1,8,720,False,459,Belgium,BEL,8263,Belgium,Belgium,3382.0,Belgium,BE1,belgium,"['Kevin De Bruyne', 'Jérémy Doku', 'Romelu Lukaku']",['Belgium']
+EGY,Egypt,eg,CAF,G,2,33,180,False,2620,Egypt,EGY,10255,Egypt,Egypt,3672.0,Egypt,EGY1,egypt,"['Mohamed Salah', 'Omar Marmoush']",['Egypt']
+IRN,Iran,ir,AFC,G,3,20,110,False,469,Iran,IRN,6711,Iran,Iran,3582.0,Iran,IRN1,iran,"['Mehdi Taremi', 'Alireza Jahanbakhsh', 'Sardar Azmoun']",['Iran']
+NZL,New Zealand,nz,OFC,G,4,86,45,False,2666,New Zealand,NZL,5820,New Zealand,New Zealand,9171.0,New Zealand,NNL1,new-zealand,"['Chris Wood', 'Marko Stamenić']",['New Zealand']
+ESP,Spain,es,UEFA,H,1,3,1100,False,164,Spain,ESP,6720,Spain,Spain,3375.0,Spain,ES1,spain,"['Rodri', 'Lamine Yamal', 'Nico Williams']",['Spain']
+URU,Uruguay,uy,CONMEBOL,H,2,15,470,False,212,Uruguay,URU,5796,Uruguay,Uruguay,3449.0,Uruguay,URU1,uruguay,"['Federico Valverde', 'Darwin Núñez', 'Ronald Araújo']",['Uruguay']
+KSA,Saudi Arabia,sa,AFC,H,3,59,35,False,655,Saudi Arabia,KSA,7795,Saudi Arabia,Saudi Arabia,3807.0,Saudi Arabia,SA1,saudi-arabia,"['Salem Al-Dawsari', 'Firas Al-Buraikan']","['Saudi Arabia', 'saudi arabia']"
+CPV,Cape Verde,cv,CAF,H,4,70,40,False,2597,Cape Verde,CPV,5888,Cape Verde,Cape Verde,4311.0,Cape Verde,CPV,kap-verde,"['Ryan Mendes', 'Bryan Teixeira']","['Cape Verde', 'cape verde', 'cape verde islands', 'cabo verde']"
+FRA,France,fr,UEFA,I,1,2,1180,False,478,France,FRA,6723,France,France,3377.0,France,FR1,france,"['Kylian Mbappé', 'Aurélien Tchouaméni', 'Ousmane Dembélé']",['France']
+SEN,Senegal,sn,CAF,I,2,18,320,False,654,Senegal,SEN,6395,Senegal,Senegal,3499.0,Senegal,SEN1,senegal,"['Sadio Mané', 'Nicolas Jackson', 'Pape Matar Sarr']",['Senegal']
+NOR,Norway,no,UEFA,I,3,38,350,False,464,Norway,NOR,8492,Norway,Norway,3440.0,Norway,NO1,norway,"['Erling Haaland', 'Martin Ødegaard', 'Sander Berge']",['Norway']
+IRQ,Iraq,iq,AFC,I,4,57,30,False,4375,Iraq,IRQ,5819,Iraq,Iraq,3560.0,Iraq,IRQ1,iraq,"['Mohanad Ali', 'Aymen Hussein', 'Ali Adnan']",['Iraq']
+ARG,Argentina,ar,CONMEBOL,J,1,1,620,False,202,Argentina,ARG,6706,Argentina,Argentina,3437.0,Argentina,ARG1,argentina,"['Lionel Messi', 'Lautaro Martínez', 'Julián Álvarez']",['Argentina']
+ALG,Algeria,dz,CAF,J,2,36,230,False,624,Algeria,ALG,6317,Algeria,Algeria,3614.0,Algeria,ALG1,algeria,"['Riyad Mahrez', 'Houssem Aouar', 'Ismaël Bennacer']",['Algeria']
+AUT,Austria,at,UEFA,J,3,25,310,False,474,Austria,AUT,8255,Austria,Austria,3383.0,Austria,A1,austria,"['David Alaba', 'Marko Arnautović', 'Konrad Laimer']",['Austria']
+JOR,Jordan,jo,AFC,J,4,64,30,False,2917,Jordan,JOR,5816,Jordan,Jordan,15737.0,Jordan,JO1L,jordan,"['Mousa Al-Taamari', 'Yazan Al-Naimat']",['Jordan']
+POR,Portugal,pt,UEFA,K,1,6,980,False,482,Portugal,POR,8361,Portugal,Portugal,3300.0,Portugal,PO1,portugal,"['Cristiano Ronaldo', 'Bruno Fernandes', 'Rafael Leão']",['Portugal']
+COL,Colombia,co,CONMEBOL,K,2,13,400,False,208,Colombia,COL,8258,Colombia,Colombia,3816.0,Colombia,COLP,colombia,"['Luis Díaz', 'James Rodríguez', 'Jhon Durán']",['Colombia']
+COD,DR Congo,cd,CAF,K,3,52,120,False,2850,Congo DR,COD,6321,DR Congo,DR Congo,3854.0,DR Congo,COD,demokratische-republik-kongo,"['Chancel Mbemba', 'Cédric Bakambu', 'Yoane Wissa']","['DR Congo', 'Congo DR', 'dr congo', 'congo dr', 'democratic republic of congo', 'congo democratic republic']"
+UZB,Uzbekistan,uz,AFC,K,4,57,55,False,2570,Uzbekistan,UZB,8700,Uzbekistan,Uzbekistan,3563.0,Uzbekistan,UZ1,uzbekistan,"['Eldor Shomurodov', 'Abbosbek Fayzullaev']",['Uzbekistan']
+ENG,England,gb-eng,UEFA,L,1,4,1300,False,448,England,ENG,8491,England,England,3299.0,England,GB1,england,"['Jude Bellingham', 'Harry Kane', 'Bukayo Saka']",['England']
+CRO,Croatia,hr,UEFA,L,2,10,380,False,477,Croatia,CRO,10155,Croatia,Croatia,3556.0,Croatia,KR1,croatia,"['Luka Modrić', 'Joško Gvardiol', 'Mateo Kovačić']",['Croatia']
+GHA,Ghana,gh,CAF,L,3,73,150,False,4469,Ghana,GHA,6714,Ghana,Ghana,3441.0,Ghana,GHPL,ghana,"['Mohammed Kudus', 'Thomas Partey']",['Ghana']
+PAN,Panama,pa,CONCACAF,L,4,41,35,False,2659,Panama,PAN,5922,Panama,Panama,3577.0,Panama,PN1C,panama,"['Adalberto Carrasquilla', 'José Fajardo']",['Panama']

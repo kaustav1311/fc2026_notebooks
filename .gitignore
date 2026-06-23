@@ -11,15 +11,32 @@
 # runs; never in git.
 data/raw/
 
-# Pipeline outputs (parquets + CSVs + emitted JSON). Regenerable from data/raw/
-# via refresh.py. The PWA gets these via the GHA workflow pushing JSONs to the
-# PWA repo, not via this repo.
-data/processed/
+# Pipeline outputs are COMMITTED as a bootstrap baseline (~40MB across 75 files).
+# This solves the cold-start dependency cascade — when GHA spins up a fresh
+# runner with no warm cache, the hourly notebooks would otherwise fail trying to
+# load wc26_nations / wc26_matches / referee_master / ... which only the frozen
+# + daily buckets produce. Committing the baseline means a normal hourly run
+# always has its dependencies on disk; refresh.py overwrites the parquets with
+# fresher versions during the run, and the GHA cache carries those to the next
+# tick. Local edits update the baseline naturally on commit.
+# (Earlier this folder was ignored; the cold-start cascade in the first GHA
+# runs forced this change.)
+# data/processed/
 
-# Event-state files for the per-tick "what's newly finished" gating. Restored
-# from GHA cache between runs.
-data/.event_state.json
+# The emitted JSON folder is a build artifact of _emit_pwa_json.py — gets
+# regenerated every run, never committed.
+data/processed/json/
+
+# .last_daily_run is just a marker file (date string only) that refresh.py
+# uses to gate the once-per-day daily bundle. Regenerated automatically;
+# ignored to avoid daily commit churn.
 data/.last_daily_run
+
+# .event_state.json IS committed as a baseline (tracks per-match/round status)
+# so cache evictions don't regress the event-driven gating to "everything is
+# newly finished". It updates every successful run, so commits will show diffs
+# when you push local refreshes — that's expected.
+# data/.event_state.json
 
 # ── python / jupyter byproducts ──────────────────────────────────────────────
 __pycache__/

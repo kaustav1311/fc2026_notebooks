@@ -1,0 +1,55 @@
+match_id,referee_id,fifa_official_id,fifa_official_name,fm_fixture_id,fm_fixture_slug,home_nation_id,away_nation_id,match_number,kickoff_utc,stage
+760415,wilton-pereira-sampaio-br,361561,Wilton SAMPAIO,25433009,mexico-south-africa,MEX,RSA,1,2026-06-11 19:00:00+00:00,group_a
+760414,amin-mohamed-omar-eg,392013,Amin Mohamed Omar,25499048,korea-republic-czech-republic,KOR,CZE,2,2026-06-12 02:00:00+00:00,group_a
+760416,facundo-tello-figueroa-ar,,,25499049,canada-bosnia-and-herzegovina,CAN,BIH,3,2026-06-12 19:00:00+00:00,group_b
+760417,danny-desmond-makkelie-cw,327159,Danny Desmond Makkelie,25567354,united-states-paraguay,USA,PAR,4,2026-06-13 01:00:00+00:00,group_d
+760420,said-martinez-xx,400191,Said MARTINEZ,25567361,qatar-switzerland,QAT,SUI,5,2026-06-13 19:00:00+00:00,group_b
+760419,slavko-vinčić-si,,,25567362,brazil-morocco,BRA,MAR,6,2026-06-13 22:00:00+00:00,group_c
+760418,mustapha-ghorbal-dz,375306,Mustapha Ghorbal,25633209,haiti-scotland,HAI,SCO,7,2026-06-14 01:00:00+00:00,group_c
+760421,jesús-valenzuela-sáez-ve,360305,Jesús Valenzuela Sáez,25633210,australia-turkiye,AUS,TUR,8,2026-06-14 04:00:00+00:00,group_d
+760422,jalal-jayed-ma,416524,Jalal Jayed,25633211,germany-curacao,GER,CUW,9,2026-06-14 17:00:00+00:00,group_e
+760425,ismail-elfath-us,392406,Ismail Elfath,25633212,netherlands-japan,NED,JPN,10,2026-06-14 20:00:00+00:00,group_f
+760423,françois-letexier-fr,399029,François Letexier,25633213,cote-d'ivoire-ecuador,CIV,ECU,11,2026-06-14 23:00:00+00:00,group_e
+760424,yael-falcón-pérez-ar,434995,Yael Falcón Pérez,25686489,sweden-tunisia,SWE,TUN,12,2026-06-15 02:00:00+00:00,group_f
+760428,adham-mohammad-tumah-makhadmeh-jo,361034,Adham Mohammad Tumah Makhadmeh,25686490,spain-cape-verde-islands,ESP,CPV,13,2026-06-15 16:00:00+00:00,group_h
+760426,ramon-abatti-br,446932,Ramon ABATTI,25686491,belgium-egypt,BEL,EGY,14,2026-06-15 19:00:00+00:00,group_g
+760429,maurizio-mariani-it,415965,Maurizio Mariani,25686492,saudi-arabia-uruguay,KSA,URU,15,2026-06-15 22:00:00+00:00,group_h
+760427,césar-arturo-ramos-palazuelos-mx,374810,César Arturo Ramos Palazuelos,25731018,iran-new-zealand,IRN,NZL,16,2026-06-16 01:00:00+00:00,group_g
+760432,alireza-faghani-ir,283448,Alireza FAGHANI,25731019,france-senegal,FRA,SEN,17,2026-06-16 19:00:00+00:00,group_i
+760430,pierre-ghislain-atcho-ga,408417,Pierre Ghislain Atcho,25731020,iraq-norway,IRQ,NOR,18,2026-06-16 22:00:00+00:00,group_i
+760433,szymon-marciniak-pl,327975,Szymon MARCINIAK,25751128,argentina-algeria,ARG,ALG,19,2026-06-17 01:00:00+00:00,group_j
+760431,dahane-beida-mr,408591,Dahane BEIDA,25751129,austria-jordan,AUT,JOR,20,2026-06-17 04:00:00+00:00,group_j
+760435,abdulrahman-ibrahim-al-jassim-qa,361083,Abdulrahman AL JASSIM,25751133,portugal-congo-dr,POR,COD,21,2026-06-17 17:00:00+00:00,group_k
+760437,clément-turpin-fr,314589,Clément Turpin,25751136,england-croatia,ENG,CRO,22,2026-06-17 20:00:00+00:00,group_l
+760434,glenn-nyberg-se,392336,Glenn Nyberg,25751137,ghana-panama,GHA,PAN,23,2026-06-17 23:00:00+00:00,group_l
+760436,anthony-taylor-gb,360460,Anthony Taylor,25792296,uzbekistan-colombia,UZB,COL,24,2026-06-18 02:00:00+00:00,group_k
+760438,tori-penso-us,428431,Tori Penso,25792298,czech-republic-south-africa,CZE,RSA,25,2026-06-18 16:00:00+00:00,group_a
+760439,joão-pedro-silva-pinheiro-pt,392268,João Pedro Silva Pinheiro,25792299,switzerland-bosnia-and-herzegovina,SUI,BIH,26,2026-06-18 19:00:00+00:00,group_b
+760440,cristián-garay-cl,,,25792300,canada-qatar,CAN,QAT,27,2026-06-18 22:00:00+00:00,group_b
+760441,gustavo-tejera-uy,408669,Gustavo Tejera,25835040,mexico-korea-republic,MEX,KOR,28,2026-06-19 01:00:00+00:00,group_a
+760442,felix-zwayer-de,348147,Felix Zwayer,25835041,united-states-australia,USA,AUS,29,2026-06-19 19:00:00+00:00,group_d
+760445,ilgiz-tantashev-uz,360687,Ilgiz Tantashev,25835042,scotland-morocco,SCO,MAR,30,2026-06-19 22:00:00+00:00,group_c
+760444,alejandro-josé-hernández-hernández-es,373845,Alejandro José Hernández Hernández,25879118,brazil-haiti,BRA,HAI,31,2026-06-20 00:30:00+00:00,group_c
+760443,ivan-barton-sv,,,25879119,turkiye-paraguay,TUR,PAR,32,2026-06-20 03:00:00+00:00,group_d
+760447,michael-oliver-gb,347710,Michael Oliver,25879121,netherlands-sweden,NED,SWE,33,2026-06-20 17:00:00+00:00,group_f
+760448,juan-gabriel-benítez-py,416159,Juan Gabriel Benítez,25879122,germany-cote-d'ivoire,GER,CIV,34,2026-06-20 20:00:00+00:00,group_e
+760446,ning-ma-cn,328495,Ning Ma,25920814,ecuador-curacao,ECU,CUW,35,2026-06-21 00:00:00+00:00,group_e
+760449,istvan-kovacs-ro,314605,Istvan Kovacs,25920815,tunisia-japan,TUN,JPN,36,2026-06-21 04:00:00+00:00,group_f
+760453,raphael-claus-br,383222,Raphael Claus,25920818,spain-saudi-arabia,ESP,KSA,37,2026-06-21 16:00:00+00:00,group_h
+760451,darío-herrera-ar,383174,Darío Herrera,25920819,belgium-iran,BEL,IRN,38,2026-06-21 19:00:00+00:00,group_g
+760450,espen-eskås-no,400227,Espen Eskås,25920821,uruguay-cape-verde-islands,URU,CPV,39,2026-06-21 22:00:00+00:00,group_h
+760452,omar-mohamed-al-ali-ae,383421,Omar Mohamed Al Ali,25956218,new-zealand-egypt,NZL,EGY,40,2026-06-22 01:00:00+00:00,group_g
+760456,amin-mohamed-omar-eg,392013,Amin Mohamed Omar,25956219,argentina-austria,ARG,AUT,41,2026-06-22 17:00:00+00:00,group_j
+760457,drew-fischer-ca,372930,Drew Fischer,25956220,france-iraq,FRA,IRQ,42,2026-06-22 21:00:00+00:00,group_i
+760454,wilton-pereira-sampaio-br,361561,Wilton SAMPAIO,25984884,norway-senegal,NOR,SEN,43,2026-06-23 00:00:00+00:00,group_i
+760455,slavko-vinčić-si,,,25984885,jordan-algeria,JOR,ALG,44,2026-06-23 03:00:00+00:00,group_j
+760461,jalal-jayed-ma,416524,Jalal Jayed,25984891,portugal-uzbekistan,POR,UZB,45,2026-06-23 17:00:00+00:00,group_k
+760458,said-martinez-xx,400191,Said MARTINEZ,25984893,england-ghana,ENG,GHA,46,2026-06-23 20:00:00+00:00,group_l
+760460,pierre-ghislain-atcho-ga,408417,Pierre Ghislain Atcho,25984894,panama-croatia,PAN,CRO,47,2026-06-23 23:00:00+00:00,group_l
+760459,maurizio-mariani-it,415965,Maurizio Mariani,26014438,colombia-congo-dr,COL,COD,48,2026-06-24 02:00:00+00:00,group_k
+760462,jesús-valenzuela-sáez-ve,360305,Jesús Valenzuela Sáez,26014440,bosnia-and-herzegovina-qatar,BIH,QAT,49,2026-06-24 19:00:00+00:00,group_b
+760463,ramon-abatti-br,446932,Ramon ABATTI,26014439,switzerland-canada,SUI,CAN,50,2026-06-24 19:00:00+00:00,group_b
+760465,césar-arturo-ramos-palazuelos-mx,374810,César Arturo Ramos Palazuelos,26014441,scotland-brazil,SCO,BRA,51,2026-06-24 22:00:00+00:00,group_c
+760464,danny-desmond-makkelie-cw,327159,Danny Desmond Makkelie,26014442,morocco-haiti,MAR,HAI,52,2026-06-24 22:00:00+00:00,group_c
+760467,yael-falcón-pérez-ar,434995,Yael Falcón Pérez,26045102,czech-republic-mexico,CZE,MEX,53,2026-06-25 01:00:00+00:00,group_a
+760466,facundo-tello-figueroa-ar,,,26045101,south-africa-korea-republic,RSA,KOR,54,2026-06-25 01:00:00+00:00,group_a
