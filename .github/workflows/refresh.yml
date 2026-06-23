@@ -210,7 +210,26 @@ jobs:
           # still run — the notebooks that succeeded have produced fresh
           # parquets, and the ones that failed leave the committed baseline
           # in place. Git diff at the push step decides what's actually new.
-          python refresh.py $ARGS || echo "::warning::refresh.py exited non-zero (some notebooks failed). Continuing to emit + push for the successful ones."
+          #
+          # The previous version of this step swallowed the failure into a
+          # generic ::warning:: with no detail, so a notebook silently and
+          # repeatedly failing (re-pushing the same stale committed baseline
+          # every tick) still showed as a green run. Surface each per-notebook
+          # failure as a red ::error:: annotation + the job summary so a
+          # silently-stuck table is visible without expanding raw logs.
+          set +e
+          python refresh.py $ARGS 2>&1 | tee refresh_output.log
+          REFRESH_EXIT=${PIPESTATUS[0]}
+          set -e
+          if [ "$REFRESH_EXIT" != "0" ]; then
+            echo "## ⚠️ refresh.py had notebook failures" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            grep '^\[fail\]' refresh_output.log | tee -a "$GITHUB_STEP_SUMMARY" | while IFS= read -r line; do
+              echo "::error::$line"
+            done
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            echo "Affected tables keep serving their last-successful committed baseline until this is fixed — see REFRESH.md event-gating notes." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       # ── 5. Emit JSON for the PWA ──────────────────────────────────────────
       - name: Emit PWA JSON
