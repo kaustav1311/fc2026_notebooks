@@ -7,9 +7,11 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── ephemeral data ───────────────────────────────────────────────────────────
-# Raw upstream API caches — 800MB+ and growing. Restored from GHA cache between
-# runs; never in git.
-data/raw/
+# Raw upstream API caches — 800MB+ and growing across most sources. Ignored
+# at the per-child level (data/raw/* not data/raw/) so we can re-include
+# specific subdirs below — git won't honour re-includes inside a directory
+# excluded by a bare-name rule.
+data/raw/*
 
 # ── exception: FootyMetrics raw HTML IS committed ────────────────────────────
 # footymetrics.com 403s GHA runner IPs, so nb_04 can never re-fetch on cron.
@@ -18,7 +20,6 @@ data/raw/
 # ~45MB of HTML lets nb_05 run on GHA from your local nb_04 output; refresh
 # locally + commit when you want fresh appointments to appear.
 !data/raw/footymetrics/
-!data/raw/footymetrics/**
 
 # Pipeline outputs are COMMITTED as a bootstrap baseline (~40MB across 75 files).
 # This solves the cold-start dependency cascade — when GHA spins up a fresh
