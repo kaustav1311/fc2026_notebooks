@@ -238,8 +238,13 @@ jobs:
           mkdir -p pwa-repo/public/data
           cp data/processed/json/*.json pwa-repo/public/data/
           cd pwa-repo
-          git config user.name "wc26-refresh-bot"
-          git config user.email "wc26-refresh-bot@users.noreply.github.com"
+          # Vercel ties a deployment to a GitHub account via the commit
+          # author email. The made-up @users.noreply.github.com address it
+          # was set to before isn't tied to any real account, so Vercel
+          # blocked the deploy ("Fix Git Configuration"). Use the repo
+          # owner's actual commit email instead.
+          git config user.name "kaustav1311"
+          git config user.email "mail.kaustav011@gmail.com"
           git add public/data/
           if git diff --cached --quiet; then
             echo "No JSON changes vs PWA HEAD — nothing to commit."
