@@ -11,6 +11,15 @@
 # runs; never in git.
 data/raw/
 
+# ── exception: FootyMetrics raw HTML IS committed ────────────────────────────
+# footymetrics.com 403s GHA runner IPs, so nb_04 can never re-fetch on cron.
+# But nb_05 (referee_assignments — actively refreshed as FIFA appoints refs)
+# READS those HTML files to parse out fixture appointments. Committing the
+# ~45MB of HTML lets nb_05 run on GHA from your local nb_04 output; refresh
+# locally + commit when you want fresh appointments to appear.
+!data/raw/footymetrics/
+!data/raw/footymetrics/**
+
 # Pipeline outputs are COMMITTED as a bootstrap baseline (~40MB across 75 files).
 # This solves the cold-start dependency cascade — when GHA spins up a fresh
 # runner with no warm cache, the hourly notebooks would otherwise fail trying to
