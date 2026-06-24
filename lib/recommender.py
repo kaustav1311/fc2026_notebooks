@@ -1043,10 +1043,12 @@ def score_players_brackets(round_id: int, fixture_profiles: pd.DataFrame,
         + bracket_weights["w_b3_external"] * b3
         + bracket_weights["w_b4_fantasy"] * b4
     )
-    # Scale bracket sum to fantasy-points scale (rough): ~6 pts is a starter
-    # baseline, brackets sum to 0-1; multiply by 12 so sum*B5 gives a 0-22 range
-    # that matches typical FIFA round scores.
-    ev_bracket = bracket_sum * 12.0 * b5
+    # Scale bracket sum to fantasy-points scale. Real per-player round score
+    # averages ~3-5 pts; an elite starter on a great fixture scores ~10-15.
+    # bracket_sum is 0-1, B5 is 0.20-1.80. Multiplier 6.5 → max EV ≈ 12 with
+    # ev_strategy on top (×2 for captain). Tuned so XI projected total
+    # lands ~50-80, matching the FIFA Fantasy distribution.
+    ev_bracket = bracket_sum * 6.5 * b5
 
     # ═══════ Output assembly ════════════════════════════════════════════════
     base_cols = ["fantasy_player_id", "fifa_player_id", "nation_id", "nation_name",
@@ -1077,8 +1079,8 @@ def score_players_brackets(round_id: int, fixture_profiles: pd.DataFrame,
     # Differential = B4's SB-boost sub-component directly. EV mirrors ev_bracket
     # across all 3 mode-suffixed columns since modes are now subsumed by B2's
     # internal per-90 normalization.
-    floor_proxy = ((b1 + b4) * 0.5 * 12 * b5).clip(0, 30)
-    ceiling_proxy = ((b2 + b3) * 0.5 * 12 * b5).clip(0, 30)
+    floor_proxy = ((b1 + b4) * 0.5 * 6.5 * b5).clip(0, 18)
+    ceiling_proxy = ((b2 + b3) * 0.5 * 6.5 * b5).clip(0, 18)
     base["floor_p90"] = floor_proxy.round(2)
     base["floor_per_app"] = floor_proxy.round(2)
     base["floor_totals"] = floor_proxy.round(2)
