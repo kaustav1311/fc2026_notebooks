@@ -746,6 +746,269 @@ DEFAULT_BRACKET_WEIGHTS = {
     "w_b4_fantasy": 0.30,
 }
 
+# ─── MODEL REGISTRY ──────────────────────────────────────────────────────────
+# Three independent scoring philosophies. Each consumes the same per-(player,
+# fixture) bracket dataframe from score_players_brackets, then re-weights the
+# brackets + applies model-specific post-boost components to produce ev_model.
+#
+# - Model 1 BANKER       — current default. Consistency + ownership + SB.
+# - Model 2 FORM HUNTER  — heavy on recency: recent5 goals/started_pct/POM,
+#                          last_round_points, fotmob recent rating.
+# - Model 3 STAT MAXIMIZER — pure FIFA stats + powerrank. Zero ownership lean.
+
+MODEL_REGISTRY = {
+    "m1_banker": {
+        "name": "Banker",
+        "blurb": "Floor-heavy. Consistency, average points, SB track record. Premium picks on favored fixtures. The default top-decile path on average rounds.",
+        "weights": {"w_b1_overall": 0.20, "w_b2_wc_perf": 0.25,
+                    "w_b3_external": 0.20, "w_b4_fantasy": 0.35},
+        "post_boosts": [],          # use brackets as-is
+        "fixture_amplifier": 1.0,    # full B5 amplification
+        "sb_quota": 9,               # 9 of 15 from <5% band
+    },
+    "m2_form_hunter": {
+        "name": "Form Hunter",
+        "blurb": "Recency-weighted. Recent goals, started-pct, fotmob rating, last-round explosions. Punishes cold streaks even on strong fixtures.",
+        "weights": {"w_b1_overall": 0.10, "w_b2_wc_perf": 0.20,
+                    "w_b3_external": 0.40, "w_b4_fantasy": 0.30},
+        # Post-boost: add a heavy recency sub-score on top of bracket_sum
+        "post_boosts": [
+            {"name": "recent_form_streak", "weight": 0.30,
+             "components": [
+                 ("recent5_goals", "rank_pct"),
+                 ("recent10_goals", "rank_pct"),
+                 ("recent5_player_of_the_match", "rank_pct"),
+                 ("recent5_started_pct", "rank_pct"),
+                 ("last_round_points", "rank_pct"),
+             ]},
+        ],
+        "fixture_amplifier": 0.85,   # slightly dampened — recent form > fixture
+        "sb_quota": 6,               # less differential bias
+    },
+    "m3_stat_max": {
+        "name": "Stat Maximizer",
+        "blurb": "Pure FIFA-stats. Powerrank + position-routed per-90 + creativity + duels. Ignores ownership entirely — picks the best player regardless of crowd.",
+        "weights": {"w_b1_overall": 0.15, "w_b2_wc_perf": 0.50,
+                    "w_b3_external": 0.25, "w_b4_fantasy": 0.10},
+        # Post-boost: add a creativity / playmaking sub-score on top
+        "post_boosts": [
+            {"name": "creativity_engine", "weight": 0.20,
+             "components": [
+                 ("fotmob_wc_chances_created", "per90_rank_pct"),
+                 ("fotmob_wc_big_chances_created", "per90_rank_pct"),
+                 ("fotmob_wc_touches_opp_box", "per90_rank_pct"),
+                 ("fifa_wc_CompletedBallProgressions", "per90_rank_pct"),
+                 ("fifa_wc_LinebreaksAttempted", "per90_rank_pct"),
+                 ("fifa_wc_NumberOfInvolvements", "per90_rank_pct"),
+             ]},
+            {"name": "powerrank_pure", "weight": 0.20,
+             "components": [
+                 ("avg_attacking_score", "rank_pct"),
+                 ("avg_defensive_score", "rank_pct"),
+                 ("avg_creativity_score", "rank_pct"),
+                 ("avg_defending_the_goal_score", "rank_pct"),
+             ]},
+        ],
+        "fixture_amplifier": 1.0,
+        "sb_quota": 3,               # ownership-blind → low SB quota
+    },
+}
+
+
+def _apply_model_boosts(brackets_df: pd.DataFrame, raw_df: pd.DataFrame,
+                         model_cfg: dict) -> pd.DataFrame:
+    """Apply a model's bracket re-weighting + post-boost components to produce
+    ev_model. brackets_df has b1..b5 + bracket_sum + ev_bracket from
+    score_players_brackets; raw_df has the underlying player attributes the
+    post-boost components reference."""
+    df = brackets_df.copy()
+    w = model_cfg["weights"]
+
+    # Re-mix bracket_sum with model weights
+    bracket_sum_model = (
+        w["w_b1_overall"] * df["b1_overall"]
+        + w["w_b2_wc_perf"] * df["b2_wc_perf"]
+        + w["w_b3_external"] * df["b3_external"]
+        + w["w_b4_fantasy"] * df["b4_fantasy"]
+    )
+
+    # Post-boost sub-scores (computed from raw_df, joined back by player_id)
+    minutes = raw_df.get("fifa_wc_TimePlayed", pd.Series(0, index=raw_df.index)).fillna(0)
+    post_total = pd.Series(0.0, index=df.index)
+    post_weight_sum = 0.0
+    boost_breakdown = {}
+    raw_lookup = raw_df.set_index("fantasy_player_id")
+
+    for boost in model_cfg.get("post_boosts", []):
+        comp_scores = []
+        for col, mode in boost["components"]:
+            if col not in raw_df.columns:
+                continue
+            raw_vals = raw_df.set_index("fantasy_player_id")[col]
+            if mode == "rank_pct":
+                vals = _rank_pct(raw_vals.fillna(0))
+            elif mode == "per90_rank_pct":
+                raw_minutes = raw_df.set_index("fantasy_player_id").get(
+                    "fifa_wc_TimePlayed", pd.Series(0, index=raw_vals.index)
+                ).fillna(0)
+                p90 = _per90(raw_vals.fillna(0), raw_minutes)
+                vals = _rank_pct(p90)
+            else:
+                vals = _rank_pct(raw_vals.fillna(0))
+            comp_scores.append(vals)
+        if not comp_scores:
+            continue
+        boost_score = sum(comp_scores) / len(comp_scores)
+        # Map boost_score (indexed by fantasy_player_id) onto df rows
+        mapped = df["fantasy_player_id"].map(boost_score.to_dict()).fillna(0.5)
+        post_total = post_total + boost["weight"] * mapped
+        post_weight_sum += boost["weight"]
+        boost_breakdown[boost["name"]] = mapped.round(3)
+
+    # Total score: bracket sum (normalized) + post boosts (additive)
+    if post_weight_sum > 0:
+        composite = (bracket_sum_model + post_total) / (1.0 + post_weight_sum)
+    else:
+        composite = bracket_sum_model
+
+    # Fixture amplifier — Form Hunter dampens it slightly; others full
+    fix_amp = model_cfg["fixture_amplifier"]
+    effective_b5 = 1.0 + (df["b5_fixture_mult"] - 1.0) * fix_amp
+
+    ev_model = (composite * 6.5 * effective_b5).round(2)
+
+    df["bracket_sum_model"] = bracket_sum_model.round(3)
+    df["post_boost_score"] = post_total.round(3)
+    df["ev_model"] = ev_model
+    for name, vals in boost_breakdown.items():
+        df[f"boost_{name}"] = vals
+    return df
+
+
+def score_for_model(round_id: int, fixture_profiles: pd.DataFrame,
+                     model_id: str) -> pd.DataFrame:
+    """Score players under a specific model. Returns the bracket dataframe with
+    ev_model + post-boost breakdowns added."""
+    if model_id not in MODEL_REGISTRY:
+        raise ValueError(f"unknown model_id {model_id!r}; known={list(MODEL_REGISTRY)}")
+    cfg = MODEL_REGISTRY[model_id]
+    # Run bracket scorer with this model's bracket weights (so the existing
+    # ev_bracket column also reflects the model — for back-compat).
+    brackets = score_players_brackets(round_id, fixture_profiles,
+                                       bracket_weights=cfg["weights"])
+
+    # Need raw player attributes for post-boost components — load once.
+    raw = pd.read_parquet(PROC / "wc26_stg_players_view.parquet")
+    raw = raw[[c for c in raw.columns if c not in {"position", "nation_id", "name"}]]
+    fp = pd.read_parquet(PROC / "fantasy_players.parquet")[
+        ["fantasy_player_id", "fifa_player_id", "last_round_points"]
+    ]
+    raw = fp.merge(raw, on="fifa_player_id", how="left")
+    pr = pd.read_parquet(PROC / "wc26_stg_player_powerrank.parquet")[
+        ["fifa_player_id", "avg_attacking_score", "avg_defensive_score",
+         "avg_creativity_score", "avg_defending_the_goal_score"]
+    ]
+    raw = raw.merge(pr, on="fifa_player_id", how="left")
+
+    return _apply_model_boosts(brackets, raw, cfg)
+
+
+def build_joint_picks(model_outputs: dict, top_n: int = 30) -> dict:
+    """Across all 3 model outputs, build:
+      - consensus: players in the top-N of ≥2 models (high-confidence picks)
+      - surprises: players in the top-N of exactly 1 model (model-specific reads)
+      - per-position-top: top 5 per position by max(ev_model) across models
+    Returns a dict suitable for JSON emit.
+    """
+    if not model_outputs:
+        return {"consensus": [], "surprises": {}, "per_position_top": {}}
+
+    # Per-model top-N sets
+    top_sets = {}
+    for mid, df in model_outputs.items():
+        top_sets[mid] = set(
+            df.sort_values("ev_model", ascending=False).head(top_n)["fantasy_player_id"]
+        )
+
+    all_pids = set()
+    for s in top_sets.values():
+        all_pids |= s
+
+    # Build a per-player aggregate row from any model (they share identity cols)
+    sample_df = next(iter(model_outputs.values()))
+    cols_id = ["fantasy_player_id", "fifa_player_id", "known_name", "nation_id",
+               "opponent_nation_id", "position", "price", "percent_selected",
+               "fixture_shape"]
+    cols_id = [c for c in cols_id if c in sample_df.columns]
+
+    consensus_rows = []
+    surprise_rows = {mid: [] for mid in model_outputs}
+
+    for pid in all_pids:
+        in_models = [mid for mid, s in top_sets.items() if pid in s]
+        # Collect ev across models
+        evs = {}
+        identity = None
+        for mid, df in model_outputs.items():
+            row = df[df["fantasy_player_id"] == pid]
+            if row.empty:
+                continue
+            evs[mid] = float(row.iloc[0]["ev_model"])
+            if identity is None:
+                identity = {c: row.iloc[0][c] for c in cols_id}
+        if identity is None:
+            continue
+        identity["evs"] = {mid: round(v, 2) for mid, v in evs.items()}
+        identity["max_ev"] = round(max(evs.values()), 2) if evs else 0.0
+        identity["models_in_top"] = in_models
+
+        if len(in_models) >= 2:
+            consensus_rows.append(identity)
+        elif len(in_models) == 1:
+            surprise_rows[in_models[0]].append(identity)
+
+    consensus_rows.sort(key=lambda r: -r["max_ev"])
+    for mid in surprise_rows:
+        surprise_rows[mid].sort(key=lambda r: -r["max_ev"])
+
+    # Per-position top 5: max ev across models
+    per_pos_top = {}
+    pos_n = {"GK": 3, "DEF": 5, "MID": 5, "FWD": 5}
+    for pos, n in pos_n.items():
+        scored = {}
+        for pid in all_pids:
+            for mid, df in model_outputs.items():
+                row = df[(df["fantasy_player_id"] == pid) & (df["position"] == pos)]
+                if not row.empty:
+                    ev = float(row.iloc[0]["ev_model"])
+                    if pid not in scored or scored[pid][0] < ev:
+                        scored[pid] = (ev, mid, row.iloc[0])
+        ranked = sorted(scored.items(), key=lambda kv: -kv[1][0])[:n]
+        per_pos_top[pos] = [
+            {
+                "rank": i + 1,
+                "fantasy_player_id": int(pid),
+                "fifa_player_id": int(r["fifa_player_id"]) if pd.notna(r["fifa_player_id"]) else None,
+                "known_name": r.get("known_name"),
+                "nation_id": r.get("nation_id"),
+                "opponent_nation_id": r.get("opponent_nation_id"),
+                "position": pos,
+                "price": float(r.get("price") or 0),
+                "percent_selected": float(r.get("percent_selected") or 0),
+                "ev_max": float(ev),
+                "ev_max_model": mid,
+                "fixture_shape": r.get("fixture_shape"),
+            }
+            for i, (pid, (ev, mid, r)) in enumerate(ranked)
+        ]
+
+    return {
+        "consensus": consensus_rows[:30],
+        "surprises": surprise_rows,
+        "per_position_top": per_pos_top,
+        "top_n_threshold": top_n,
+    }
+
 
 def _rank_pct(s: pd.Series, ascending: bool = True) -> pd.Series:
     """Convert a numeric series to a 0-1 rank percentile. NaN -> 0.5 (median)."""
@@ -1388,12 +1651,17 @@ POSITION_QUOTA = {"GK": 2, "DEF": 5, "MID": 5, "FWD": 3}
 
 
 def _ev_strategy(scored: pd.DataFrame, strat: dict) -> pd.Series:
-    """Compute ev_strategy = α·floor + β·ceiling + γ·differential.
+    """Compute the ev_strategy column used by the squad assembler.
 
-    Per D-1: normalization mode is the simple mean across the 3 mode scores
-    (so no factor is silently skewed by minutes-handling). Strategies don't
-    own a single mode.
+    Two modes:
+      - If strat has `ev_col` set, use that column directly (model-based path:
+        the model wrapper passes `ev_col="ev_model"` so the assembler sorts on
+        the model's composite score).
+      - Otherwise: α·floor + β·ceiling + γ·differential (legacy bracket+strategy
+        path that's still used by the older Banker/Steady/Differential triplet).
     """
+    if "ev_col" in strat and strat["ev_col"] in scored.columns:
+        return scored[strat["ev_col"]].fillna(0).astype(float)
     floor_mean = scored[["floor_p90", "floor_per_app", "floor_totals"]].mean(axis=1)
     ceil_mean = scored[["ceiling_p90", "ceiling_per_app", "ceiling_totals"]].mean(axis=1)
     diff = scored["differential"].fillna(0)
@@ -1657,6 +1925,175 @@ def build_position_suggestor(scored: pd.DataFrame) -> dict:
             pos: [slim(r) for _, r in look_out_for_df[look_out_for_df["position"] == pos].iterrows()]
             for pos in ["DEF", "MID", "FWD", "GK"]
         },
+    }
+
+
+# ─── Tracking — per-model round results ─────────────────────────────────────
+
+
+# FIFA Fantasy free-transfer count by round (per master plan §F squad constraints).
+FREE_TRANSFERS_BY_ROUND = {
+    1: float("inf"),  # pre-MD1 setup, unlimited
+    2: 2, 3: 2,        # group MD2/MD3
+    4: float("inf"),  # R32 reset, unlimited
+    5: 4,             # R16
+    6: 4,             # QF
+    7: 5,             # SF
+    8: 6,             # Final
+}
+EXTRA_TRANSFER_COST = 3  # pts deducted per extra transfer above free count
+
+
+def _squad_pick_ids(squad: dict) -> set:
+    """Return the 15-man set (starting + bench) of fantasy_player_ids."""
+    out = set()
+    for p in squad.get("starting_xi", []):
+        out.add(int(p["fantasy_player_id"]))
+    for p in squad.get("bench", []):
+        out.add(int(p["fantasy_player_id"]))
+    return out
+
+
+def compute_round_actuals(model_id: str, round_id: int,
+                           squad_for_round: dict,
+                           prior_squad: dict | None = None) -> dict:
+    """For a closed round: join the squad against fantasy_player_round_stats
+    to surface per-player actual points, the XI actual total (with captain
+    doubled), transfer count + cost, and aggregate metrics. Caller passes
+    the squad assembled for THIS round and the prior round's squad (for the
+    transfer diff).
+    """
+    rs = pd.read_parquet(PROC / "fantasy_player_round_stats.parquet")
+    rs_round = rs[rs["round_id"] == round_id]
+    pts_by_pid = dict(zip(rs_round["fantasy_player_id"], rs_round["points"]))
+    minutes_by_pid = dict(zip(rs_round["fantasy_player_id"], rs_round["minutes_played"]))
+
+    captain_id = squad_for_round.get("captain_id")
+    vice_id = squad_for_round.get("vice_captain_id")
+
+    starting_xi_actuals = []
+    xi_total = 0.0
+    captain_played = False
+    for p in squad_for_round.get("starting_xi", []):
+        pid = int(p["fantasy_player_id"])
+        pts = float(pts_by_pid.get(pid, 0) or 0)
+        mins = float(minutes_by_pid.get(pid, 0) or 0)
+        is_cap = pid == captain_id
+        is_vc = pid == vice_id
+        eff_pts = pts * (2 if is_cap and mins > 0 else 1)
+        if is_cap and mins > 0:
+            captain_played = True
+        xi_total += eff_pts
+        starting_xi_actuals.append({
+            "fantasy_player_id": pid,
+            "known_name": p.get("known_name"),
+            "position": p["position"],
+            "is_captain": is_cap,
+            "is_vice_captain": is_vc,
+            "minutes_played": mins,
+            "raw_pts": pts,
+            "effective_pts": eff_pts,
+            "match_finished": mins > 0 or pts != 0,
+        })
+
+    # Captain didn't play → vice steps in
+    if not captain_played and vice_id is not None:
+        for entry in starting_xi_actuals:
+            if entry["fantasy_player_id"] == vice_id and entry["minutes_played"] > 0:
+                # Double the vice points
+                xi_total += entry["raw_pts"]  # already counted once; add second copy
+                entry["effective_pts"] = entry["raw_pts"] * 2
+                entry["promoted_captain"] = True
+                break
+
+    bench_actuals = [
+        {
+            "fantasy_player_id": int(p["fantasy_player_id"]),
+            "known_name": p.get("known_name"),
+            "position": p["position"],
+            "raw_pts": float(pts_by_pid.get(int(p["fantasy_player_id"]), 0) or 0),
+        }
+        for p in squad_for_round.get("bench", [])
+    ]
+
+    # Transfers
+    transfer_count = 0
+    transfers_in: list = []
+    transfers_out: list = []
+    if prior_squad is not None:
+        prev_set = _squad_pick_ids(prior_squad)
+        curr_set = _squad_pick_ids(squad_for_round)
+        transfers_out = sorted(prev_set - curr_set)
+        transfers_in = sorted(curr_set - prev_set)
+        transfer_count = len(transfers_in)
+    free_t = FREE_TRANSFERS_BY_ROUND.get(round_id, 2)
+    extra_t = max(0, transfer_count - (0 if free_t == float("inf") else int(free_t)))
+    transfer_penalty = extra_t * EXTRA_TRANSFER_COST
+
+    final_total = xi_total - transfer_penalty
+
+    return {
+        "model_id": model_id,
+        "round_id": round_id,
+        "starting_xi_actuals": starting_xi_actuals,
+        "bench_actuals": bench_actuals,
+        "xi_actual_total": round(xi_total, 1),
+        "transfer_count": transfer_count,
+        "free_transfers": (None if free_t == float("inf") else int(free_t)),
+        "extra_transfers": extra_t,
+        "transfer_penalty": transfer_penalty,
+        "final_round_pts": round(final_total, 1),
+        "transfers_in": transfers_in,
+        "transfers_out": transfers_out,
+        "captain_played": captain_played,
+    }
+
+
+def build_round_tracking(squads_by_round: dict[int, list[dict]]) -> dict:
+    """squads_by_round: {round_id: [squad_dict_for_each_model]}.
+    For each (model, round) pair where the round is closed, compute the
+    actuals. Returns a list ready for JSON emit.
+
+    Returns:
+      {
+        "by_model": {model_id: [{round_id, projected, actual, transfers, ...}, ...]},
+        "totals": {model_id: total_pts_so_far},
+        "round_status": {round_id: "complete" | "playing" | "scheduled"}
+      }
+    """
+    fr = pd.read_parquet(PROC / "fantasy_rounds.parquet")
+    status_by_round = dict(zip(fr["round_id"].astype(int), fr["status"]))
+
+    by_model: dict[str, list] = {}
+    for round_id, squads in sorted(squads_by_round.items()):
+        status = status_by_round.get(round_id, "scheduled")
+        for sq in squads:
+            mid = sq.get("model_id") or sq.get("strategy_id")
+            row = {
+                "model_id": mid,
+                "round_id": round_id,
+                "status": status,
+                "projected_pts": sq.get("projected_pts_with_captain"),
+                "snapshot_ts": sq.get("snapshot_ts"),
+            }
+            if status == "complete":
+                prior = None
+                if (round_id - 1) in squads_by_round:
+                    prior_list = squads_by_round[round_id - 1]
+                    prior = next((s for s in prior_list
+                                  if (s.get("model_id") or s.get("strategy_id")) == mid), None)
+                actuals = compute_round_actuals(mid, round_id, sq, prior)
+                row.update(actuals)
+            by_model.setdefault(mid, []).append(row)
+
+    totals = {
+        mid: round(sum(r.get("final_round_pts", 0) or 0 for r in rows), 1)
+        for mid, rows in by_model.items()
+    }
+    return {
+        "by_model": by_model,
+        "totals": totals,
+        "round_status": status_by_round,
     }
 
 

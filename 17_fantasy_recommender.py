@@ -1,18 +1,21 @@
-"""Phase C — Fantasy recommender (per-round).
+"""Phase C/D — Fantasy recommender (per-round, 3-model architecture).
 
 Runs after notebook 16 on the hourly tick. Produces:
-  - data/processed/wc26_fantasy_recommendations.parquet
-  - data/processed/wc26_fantasy_recommendations.json
-  - data/eda/archetypes_retrospective_v2.json
-  - data/eda/archetypes_prospective_v2.json
+  - data/processed/wc26_fantasy_recommendations.{parquet,json}    Model 1 (banker, back-compat)
+  - data/processed/wc26_fantasy_models.json                       All 3 model outputs slimmed
+  - data/processed/wc26_fantasy_strategy_squads.json              3 challenge squads (one per model)
+  - data/processed/wc26_fantasy_position_suggestor.json           Joint per-position-top + look out for
+  - data/processed/wc26_fantasy_joint_picks.json                  Consensus + per-model surprises
+  - data/processed/wc26_fantasy_round_tracking.json               Per-(model, round) projected vs actual
+  - data/eda/archetypes_retrospective_v2.json / archetypes_prospective_v2.json
+  - data/processed/history/round_NN/snapshot_{TS}.json            Pre-lock freeze for round tracking
 
-The PWA consumes the JSON via _emit_pwa_json.py.
-
-Target round: the first `active` or `upcoming` round in fantasy_rounds.
+The PWA consumes the JSONs via _emit_pwa_json.py.
 """
 from __future__ import annotations
 
 import json
+import math
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,14 +28,16 @@ sys.path.insert(0, str(ROOT))
 
 from lib.recommender import (
     assemble_fixture_profile,
-    score_players_brackets,
+    score_for_model,
+    build_joint_picks,
+    build_round_tracking,
     mine_archetypes_v2,
     attach_archetypes,
     apply_filters,
     tag_anti_picks,
     assemble_strategy_squad,
     build_position_suggestor,
-    STRATEGIES,
+    MODEL_REGISTRY,
 )
 
 PROC = ROOT / "data" / "processed"
@@ -42,36 +47,45 @@ EDA_DIR = ROOT / "data" / "eda"
 
 
 def pick_target_round() -> int:
-    """Pick the next round that hasn't started yet, OR the currently playing
-    round if its end_date is still in the future."""
     fr = pd.read_parquet(PROC / "fantasy_rounds.parquet")
     now = pd.Timestamp.now(tz="UTC")
     fr["start"] = pd.to_datetime(fr["start_date"], utc=True, errors="coerce")
     fr["end"] = pd.to_datetime(fr["end_date"], utc=True, errors="coerce")
-    # Playing AND not yet ended
     live = fr[(fr["status"] == "playing") & (fr["end"] > now)]
     if not live.empty:
         return int(live.iloc[0]["round_id"])
-    # Otherwise next scheduled
     sched = fr[fr["start"] > now].sort_values("start")
     if not sched.empty:
         return int(sched.iloc[0]["round_id"])
-    # Otherwise the latest known
     return int(fr["round_id"].max())
 
 
-def to_json_safe(v):
-    if isinstance(v, (np.integer,)):
-        return int(v)
-    if isinstance(v, (np.floating,)):
-        return None if np.isnan(v) else float(v)
-    if isinstance(v, (np.bool_,)):
-        return bool(v)
-    if isinstance(v, pd.Timestamp):
-        return v.isoformat()
-    if pd.isna(v) if not isinstance(v, (list, dict)) else False:
-        return None
-    return v
+def sanitize_for_js(obj):
+    if isinstance(obj, dict):
+        return {k: sanitize_for_js(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [sanitize_for_js(v) for v in obj]
+    if isinstance(obj, float):
+        return None if (math.isnan(obj) or math.isinf(obj)) else obj
+    if isinstance(obj, np.floating):
+        f = float(obj)
+        return None if (math.isnan(f) or math.isinf(f)) else f
+    if isinstance(obj, np.integer):
+        return int(obj)
+    if isinstance(obj, np.bool_):
+        return bool(obj)
+    if isinstance(obj, pd.Timestamp):
+        return None if pd.isna(obj) else obj.isoformat()
+    try:
+        if pd.isna(obj):
+            return None
+    except (TypeError, ValueError):
+        pass
+    return obj
+
+
+def dump_js_safe(obj) -> str:
+    return json.dumps(sanitize_for_js(obj), default=str, allow_nan=False)
 
 
 def df_to_records(df: pd.DataFrame) -> list[dict]:
@@ -85,52 +99,48 @@ def df_to_records(df: pd.DataFrame) -> list[dict]:
                 elif pd.isna(val):
                     d[col] = None
                 else:
-                    d[col] = to_json_safe(val)
+                    d[col] = sanitize_for_js(val)
             except (TypeError, ValueError):
                 d[col] = val
         out.append(d)
     return out
 
 
-def sanitize_for_js(obj):
-    """Recursively walk a dict/list and replace NaN/Infinity floats with None.
-
-    JavaScript's JSON.parse() throws SyntaxError on `NaN` and `Infinity`
-    tokens — they're not in the JSON spec — while Python's json.dumps writes
-    them by default. Anything bound for the PWA must be sanitized first.
-    """
-    import math
-    if isinstance(obj, dict):
-        return {k: sanitize_for_js(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)):
-        return [sanitize_for_js(v) for v in obj]
-    if isinstance(obj, float):
-        if math.isnan(obj) or math.isinf(obj):
-            return None
-        return obj
-    if isinstance(obj, np.floating):
-        f = float(obj)
-        if math.isnan(f) or math.isinf(f):
-            return None
-        return f
-    if isinstance(obj, np.integer):
-        return int(obj)
-    if isinstance(obj, np.bool_):
-        return bool(obj)
-    if isinstance(obj, pd.Timestamp):
-        return None if pd.isna(obj) else obj.isoformat()
-    # pd.NA / np.nan that survived as scalar
-    try:
-        if pd.isna(obj):
-            return None
-    except (TypeError, ValueError):
-        pass
-    return obj
+def tag_chips(row):
+    chips = []
+    if row.get("anti_pick"):
+        chips.append("HEDGE")
+    if (row.get("percent_selected") or 50) < 5:
+        chips.append("DIFFERENTIAL")
+    if (row.get("sb_total") or 0) >= 1:
+        chips.append(f"SB_TRACK_x{int(row['sb_total'])}")
+    if (row.get("differential") or 0) > 1.5:
+        chips.append("SB_LIKELY")
+    if (row.get("ceiling_per_app") or 0) > 7:
+        chips.append("CEILING_HOT")
+    if row.get("fixture_shape") == "consensus_lopsided":
+        chips.append("FAVORED_FIXTURE")
+    if row.get("trend_top_confidence") and row["trend_top_confidence"] > 0.7:
+        chips.append(f"TREND_{row['trend_top_category'].upper()}")
+    return chips
 
 
-def dump_js_safe(obj) -> str:
-    """JSON dump that's guaranteed JS-parseable: no NaN, no Infinity."""
-    return json.dumps(sanitize_for_js(obj), default=str, allow_nan=False)
+def model_to_strategy(model_id: str, cfg: dict) -> dict:
+    """Translate a MODEL_REGISTRY entry to a strategy dict the assembler accepts."""
+    return {
+        "id": model_id,
+        "name": cfg["name"],
+        "blurb": cfg["blurb"],
+        "sb_quota": cfg["sb_quota"],
+        # The assembler picks up ev_col first; the α/β/γ fields are ignored
+        # but kept for legacy code paths that may still read them.
+        "ev_col": "ev_model",
+        "alpha_floor": 0.0,
+        "beta_ceiling": 0.0,
+        "gamma_differential": 0.0,
+        "fixture_filter": None,
+        "anti_pick_allowed": True,
+    }
 
 
 def main():
@@ -138,7 +148,7 @@ def main():
     target = pick_target_round()
     print(f"[17] target round: {target}  (snapshot {snapshot_ts})")
 
-    # 1. Archetypes
+    # 1. Archetypes (mode-agnostic — shared across models)
     print("[17] mining archetypes (retrospective + prospective)…")
     retro = mine_archetypes_v2("retrospective")
     prospective = mine_archetypes_v2("prospective")
@@ -159,59 +169,40 @@ def main():
     fx = assemble_fixture_profile(target)
     print(f"[17]   {len(fx)} fixtures for round {target}")
 
-    # 3. Player scoring via 5-bracket Player Strength Score model
-    print("[17] scoring players via bracket model (B1-B5)…")
-    scored = score_players_brackets(target, fx)
+    # 3. Score under each model
+    print("[17] scoring under 3 models (m1_banker, m2_form_hunter, m3_stat_max)…")
+    model_outputs: dict[str, pd.DataFrame] = {}
+    for mid, cfg in MODEL_REGISTRY.items():
+        scored = score_for_model(target, fx, mid)
+        scored = attach_archetypes(scored, retro, prospective)
+        scored = apply_filters(scored)
+        scored = tag_anti_picks(scored)
+        scored["reason_chips"] = scored.apply(tag_chips, axis=1)
+        scored["snapshot_ts"] = snapshot_ts
+        scored["target_round_id"] = target
+        scored["model_id"] = mid
+        model_outputs[mid] = scored
+        top5 = scored.sort_values("ev_model", ascending=False).head(5)
+        print(f"[17]   {mid:20s} ({cfg['name']:14s}) — top: " +
+              ", ".join(f"{r['known_name']}({r['ev_model']:.1f})"
+                        for _, r in top5.iterrows()))
 
-    # 4. Archetype enrichment
-    scored = attach_archetypes(scored, retro, prospective)
-
-    # 5. Filters
-    scored = apply_filters(scored)
-    print(f"[17]   {len(scored)} player-fixture rows after filters")
-
-    # 6. Anti-pick tagging (D-3)
-    scored = tag_anti_picks(scored)
-
-    # 7. Tagging reason chips
-    def tag_chips(row):
-        chips = []
-        if row.get("anti_pick"):
-            chips.append("HEDGE")
-        if (row.get("percent_selected") or 50) < 5:
-            chips.append("DIFFERENTIAL")
-        if (row.get("sb_total") or 0) >= 1:
-            chips.append(f"SB_TRACK_x{int(row['sb_total'])}")
-        if (row.get("differential") or 0) > 1.5:
-            chips.append("SB_LIKELY")
-        if (row.get("ceiling_per_app") or 0) > 7:
-            chips.append("CEILING_HOT")
-        if row.get("fixture_shape") == "consensus_lopsided":
-            chips.append("FAVORED_FIXTURE")
-        if row.get("trend_top_confidence") and row["trend_top_confidence"] > 0.7:
-            chips.append(f"TREND_{row['trend_top_category'].upper()}")
-        return chips
-    scored["reason_chips"] = scored.apply(tag_chips, axis=1)
-
-    # 8. Persist
-    scored["snapshot_ts"] = snapshot_ts
-    scored["target_round_id"] = target
-
+    # 4. Back-compat: Model 1 (Banker) is the legacy recommendation file
+    banker = model_outputs["m1_banker"]
     out_parquet = PROC / "wc26_fantasy_recommendations.parquet"
-    scored.to_parquet(out_parquet, index=False)
-    print(f"[17]   wrote {out_parquet} ({len(scored)} rows)")
+    banker.to_parquet(out_parquet, index=False)
+    print(f"[17]   wrote {out_parquet} ({len(banker)} rows) [m1_banker as legacy]")
 
-    # JSON output — slim down to client-facing fields
-    client_cols = [
-        "target_round_id", "fantasy_player_id", "fifa_player_id", "nation_id",
+    client_cols_recs = [
+        "target_round_id", "model_id",
+        "fantasy_player_id", "fifa_player_id", "nation_id",
         "opponent_nation_id", "is_home", "position", "price", "percent_selected",
         "known_name", "first_name", "last_name",
         "sb_total", "form", "avg_points", "total_points", "last_round_points",
         "start_prob", "differential", "anti_pick",
-        # Bracket model (B1-B5 + composite)
         "b1_overall", "b2_wc_perf", "b3_external", "b4_fantasy",
         "b5_fixture_mult", "bracket_sum", "ev_bracket",
-        # Back-compat aliases for the existing assembler / suggestor / UI
+        "bracket_sum_model", "post_boost_score", "ev_model",
         "floor_p90", "ceiling_p90", "ev_raw_p90",
         "floor_per_app", "ceiling_per_app", "ev_raw_per_app",
         "floor_totals", "ceiling_totals", "ev_raw_totals",
@@ -226,51 +217,88 @@ def main():
         "archetype_prospective_examples",
         "reason_chips", "snapshot_ts",
     ]
-    client_cols = [c for c in client_cols if c in scored.columns]
-    records = df_to_records(scored[client_cols])
-    out_json = PROC / "wc26_fantasy_recommendations.json"
-    safe_recs = dump_js_safe(records)
-    out_json.write_text(safe_recs)
+    cols = [c for c in client_cols_recs if c in banker.columns]
+    safe_recs = dump_js_safe(df_to_records(banker[cols]))
+    (PROC / "wc26_fantasy_recommendations.json").write_text(safe_recs)
     (PWA_JSON / "wc26_fantasy_recommendations.json").write_text(safe_recs)
-    print(f"[17]   wrote {out_json} + PWA copy ({len(records)} rows)")
+    print(f"[17]   wrote PWA recommendations.json ({len(banker)} rows)")
 
-    # ─── Phase D: position suggestor + strategy squads ──────────────────────
-    print("[17] building position suggestor (Top 15 + Look out for)…")
-    suggestor = build_position_suggestor(scored)
+    # 5. NEW: all 3 models slimmed for the UI
+    print("[17] emitting per-model slimmed outputs…")
+    models_payload = {}
+    slim_cols = [
+        "fantasy_player_id", "fifa_player_id", "nation_id", "opponent_nation_id",
+        "is_home", "position", "price", "percent_selected", "known_name",
+        "sb_total", "ev_model", "bracket_sum_model", "post_boost_score",
+        "b1_overall", "b2_wc_perf", "b3_external", "b4_fantasy", "b5_fixture_mult",
+        "fixture_shape", "trend_top_category", "trend_top_confidence",
+        "fantasy_match_id", "reason_chips", "is_active",
+    ]
+    for mid, df in model_outputs.items():
+        cfg = MODEL_REGISTRY[mid]
+        slim = df[[c for c in slim_cols if c in df.columns]]
+        models_payload[mid] = {
+            "id": mid,
+            "name": cfg["name"],
+            "blurb": cfg["blurb"],
+            "weights": cfg["weights"],
+            "fixture_amplifier": cfg["fixture_amplifier"],
+            "sb_quota": cfg["sb_quota"],
+            "post_boosts": [b["name"] for b in cfg.get("post_boosts", [])],
+            "rows": df_to_records(slim),
+        }
+    models_payload["target_round_id"] = target
+    models_payload["snapshot_ts"] = snapshot_ts
+    safe_models = dump_js_safe(models_payload)
+    (PROC / "wc26_fantasy_models.json").write_text(safe_models)
+    (PWA_JSON / "wc26_fantasy_models.json").write_text(safe_models)
+    print(f"[17]   wrote models.json ({sum(len(p['rows']) for k,p in models_payload.items() if isinstance(p,dict) and 'rows' in p)} total rows)")
+
+    # 6. Joint picks (consensus + surprises + per-position top)
+    print("[17] building joint picks across models…")
+    joint = build_joint_picks(model_outputs, top_n=30)
+    joint["target_round_id"] = target
+    joint["snapshot_ts"] = snapshot_ts
+    safe_joint = dump_js_safe(joint)
+    (PROC / "wc26_fantasy_joint_picks.json").write_text(safe_joint)
+    (PWA_JSON / "wc26_fantasy_joint_picks.json").write_text(safe_joint)
+    print(f"[17]   consensus={len(joint['consensus'])}  surprises=" +
+          str({k: len(v) for k, v in joint["surprises"].items()}))
+
+    # 7. Position suggestor — still emit one (used by current UI). Use the
+    # Banker model's view as the base; joint per-position-top is also in
+    # joint_picks.json for the UI to optionally overlay.
+    suggestor = build_position_suggestor(banker)
     suggestor["target_round_id"] = target
     suggestor["snapshot_ts"] = snapshot_ts
-    sug_path = PROC / "wc26_fantasy_position_suggestor.json"
     safe_sug = dump_js_safe(suggestor)
-    sug_path.write_text(safe_sug)
+    (PROC / "wc26_fantasy_position_suggestor.json").write_text(safe_sug)
     (PWA_JSON / "wc26_fantasy_position_suggestor.json").write_text(safe_sug)
-    print(f"[17]   wrote {sug_path}  top15={len(suggestor['top_15_overall'])}  "
-          f"look_out_for={sum(len(v) for v in suggestor['look_out_for'].values())}")
 
-    print("[17] assembling 3 strategy squads (S1=9 / S2=5 / S3=12 diff)…")
+    # 8. Squads — ONE per model now (3 challenges). Each model's squad sorts
+    # by ev_model and respects its own sb_quota.
+    print("[17] assembling 3 challenge squads (one per model)…")
     squads = []
-    for strat in STRATEGIES:
+    for mid, cfg in MODEL_REGISTRY.items():
+        strat = model_to_strategy(mid, cfg)
+        scored = model_outputs[mid]
         sq = assemble_strategy_squad(scored, strat, budget_m=100.0, max_per_nation=3)
         sq_unbud = assemble_strategy_squad(scored, strat, budget_m=100.0,
                                             max_per_nation=3, non_budget=True)
         sq["unbudgeted_variant"] = sq_unbud
         sq["target_round_id"] = target
         sq["snapshot_ts"] = snapshot_ts
+        sq["model_id"] = mid
+        sq["weights"] = cfg["weights"]
         squads.append(sq)
-        print(f"[17]   {strat['id']}: formation={sq['formation']}  £{sq['budget_spent_m']:.1f}m  "
-              f"SB-band={sq['sb_band_count']}/{strat['sb_quota']}+  proj={sq['projected_pts_with_captain']:.1f}")
+        print(f"[17]   {mid}: formation={sq['formation']} £{sq['budget_spent_m']:.1f}m "
+              f"SB={sq['sb_band_count']}/{cfg['sb_quota']}+ proj={sq['projected_pts_with_captain']:.1f}")
 
-    sqd_path = PROC / "wc26_fantasy_strategy_squads.json"
     safe_sq = dump_js_safe(squads)
-    sqd_path.write_text(safe_sq)
+    (PROC / "wc26_fantasy_strategy_squads.json").write_text(safe_sq)
     (PWA_JSON / "wc26_fantasy_strategy_squads.json").write_text(safe_sq)
-    print(f"[17]   wrote {sqd_path}  ({len(squads)} strategies)")
 
-    # ─── Historical snapshot (pre-round-lock freeze) ───────────────────────
-    # Every tick writes a timestamped snapshot. After a round completes, the
-    # final pre-lock snapshot (newest with timestamp BEFORE round start) is the
-    # "committed" prediction for round-tracking. Phase F joins this against
-    # fantasy_player_round_stats to produce per-strategy round actuals.
-    print("[17] writing historical round-lock snapshot…")
+    # 9. Historical snapshot (per-round-lock freeze)
     history_dir = PROC / "history" / f"round_{target:02d}"
     history_dir.mkdir(parents=True, exist_ok=True)
     safe_ts = snapshot_ts.replace(":", "-").replace("+00:00", "Z").split(".")[0]
@@ -278,14 +306,50 @@ def main():
     snap_path.write_text(json.dumps({
         "round_id": target,
         "snapshot_ts": snapshot_ts,
-        "model_version": "brackets_v1",  # bumps on scoring-formula changes
-        "recommendations": records,
-        "position_suggestor": suggestor,
-        "strategy_squads": squads,
+        "model_version": "models_v2",
+        "models": list(MODEL_REGISTRY.keys()),
+        "strategy_squads": sanitize_for_js(squads),
+        "position_suggestor": sanitize_for_js(suggestor),
+        "joint_picks": sanitize_for_js(joint),
     }, default=str))
-    print(f"[17]   wrote {snap_path} ({snap_path.stat().st_size // 1024} KB)")
+    print(f"[17]   wrote {snap_path}")
 
-    return scored
+    # 10. Round tracking — load committed snapshots from prior rounds + current,
+    # join against fantasy_player_round_stats for closed rounds.
+    print("[17] building round tracking…")
+    squads_by_round: dict[int, list[dict]] = {target: squads}
+    history_root = PROC / "history"
+    if history_root.exists():
+        for round_dir in sorted(history_root.iterdir()):
+            if not round_dir.is_dir():
+                continue
+            try:
+                rid = int(round_dir.name.replace("round_", ""))
+            except ValueError:
+                continue
+            if rid == target:
+                continue
+            # Latest snapshot per round (newest mtime)
+            snaps = sorted(round_dir.glob("snapshot_*.json"), key=lambda p: p.stat().st_mtime)
+            if not snaps:
+                continue
+            try:
+                snap = json.loads(snaps[-1].read_text())
+            except Exception:
+                continue
+            prior_squads = snap.get("strategy_squads") or []
+            squads_by_round[rid] = prior_squads
+
+    tracking = build_round_tracking(squads_by_round)
+    tracking["target_round_id"] = target
+    tracking["snapshot_ts"] = snapshot_ts
+    safe_track = dump_js_safe(tracking)
+    (PROC / "wc26_fantasy_round_tracking.json").write_text(safe_track)
+    (PWA_JSON / "wc26_fantasy_round_tracking.json").write_text(safe_track)
+    print(f"[17]   tracking totals: {tracking['totals']}")
+
+    print("[17] done")
+    return model_outputs
 
 
 if __name__ == "__main__":

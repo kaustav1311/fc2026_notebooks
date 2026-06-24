@@ -448,34 +448,37 @@ def sheet_scoring(wb: Workbook) -> None:
 
 
 def sheet_strategies(wb: Workbook) -> None:
-    s = wb.create_sheet("Strategies")
-    add_title(s, "Three default strategies — K's SB-quotas + my aggression mapping",
-              "SB-quota = target count of starting-15 picks from <5% ownership band (±1 tolerance).")
+    s = wb.create_sheet("Models")
+    add_title(s, "Three independent models — one squad each (Challenges)",
+              "Each model scores the same player pool with a different philosophy. The 3 squads track separately like real fantasy teams.")
 
-    # Load actual squads to embed sample picks
     try:
         squads = json.loads((PROC / "wc26_fantasy_strategy_squads.json").read_text())
     except Exception:
         squads = []
-    squad_by_id = {sq["strategy_id"]: sq for sq in squads}
+    squad_by_id = {sq.get("model_id") or sq.get("strategy_id"): sq for sq in squads}
 
-    headers = ["Attribute", "S1 — Balanced Hunter", "S2 — Steady Banker", "S3 — Differential Maximizer"]
+    MIDS = ["m1_banker", "m2_form_hunter", "m3_stat_max"]
+
+    headers = ["Attribute", "M1 — Banker", "M2 — Form Hunter", "M3 — Stat Maximizer"]
     rows = [
         ["Intent",
-         "Mid-aggression. Chases SB and contrarian fixture mismatches while keeping a spine of proven scorers.",
-         "Low aggression. Floor-maximizing premium picks on favored fixtures. Cleanest top-10% path on average rounds.",
-         "Max aggression. Built for SB +2 hunting and rank-leap rounds. Higher variance, every SB-firing player a multiplier."],
-        ["SB-quota (target, ±1)", "9 of 15", "5 of 15", "12 of 15"],
-        ["Floor weight (α)", 0.40, 0.65, 0.20],
-        ["Ceiling weight (β)", 0.40, 0.20, 0.45],
-        ["Differential weight (γ)", 0.20, 0.15, 0.35],
-        ["Normalization mode", "Ensemble mean (all 3)", "Ensemble mean (all 3)", "Ensemble mean (all 3)"],
-        ["Fixture-shape preference", "Any; anti_pick allowed on consensus_tight",
-         "Lopsided; anti_pick not used", "Any; anti_pick allowed on consensus_tight"],
+         "Floor-heavy. Consistency, average points, SB track record. Premium picks on favored fixtures. Cleanest top-decile path on average rounds.",
+         "Recency-weighted. Recent goals, started-pct, fotmob rating, last-round explosions. Punishes cold streaks even on strong fixtures.",
+         "Pure FIFA-stats. Powerrank + position-routed per-90 + creativity + duels. Ignores ownership entirely — picks best player regardless of crowd."],
+        ["Bracket weight w_B1 (PlayerOverall)", 0.20, 0.10, 0.15],
+        ["Bracket weight w_B2 (WC Perf)",      0.25, 0.20, 0.50],
+        ["Bracket weight w_B3 (External)",     0.20, 0.40, 0.25],
+        ["Bracket weight w_B4 (Fantasy meta)", 0.35, 0.30, 0.10],
+        ["Post-boost sub-scores", "(none — bracket-only)",
+         "recent_form_streak (recent5/10 goals, POM, started_pct, last_round_pts)",
+         "creativity_engine (chances_created, big_chances, touches_opp_box, ball-progressions) + powerrank_pure (atk/def/cre/gk)"],
+        ["Fixture amplifier (B5 weight)", 1.00, 0.85, 1.00],
+        ["SB-quota (target, ±1)", "9 of 15", "6 of 15", "3 of 15"],
+        ["Captain rule", "argmax(ev_model × 2 + Σ ev_others over XI)", "same", "same"],
         ["Budget mode", "Both (budget + unbudgeted)", "Both", "Both"],
-        ["Chip plan", "Wildcard → R16; 12th Man → R16; Max Captain → QF; Qual Boost → QF",
-         "Wildcard → group MD3 (if 5+ injuries) else hold; 12th Man → R16; Max Captain → QF",
-         "Wildcard → QF (variance amplifier); 12th Man → R32; Max Captain → SF; Qual Boost → R16"],
+        ["Tracking", "Each model runs as its own Challenge — round-by-round actuals tracked against fantasy_player_round_stats. Transfer rules per FIFA Fantasy spec: 2 free MD2/MD3, unlimited R32, 4 R16/QF, 5 SF, 6 Final, -3 per extra.",
+         "same", "same"],
     ]
     for j, h in enumerate(headers, start=1):
         s.cell(row=4, column=j, value=h)
@@ -485,63 +488,56 @@ def sheet_strategies(wb: Workbook) -> None:
     style_header_row(s, 4, len(headers))
     style_body(s, 5, 5 + len(rows) - 1, len(headers))
 
-    # Captain + projected pts current snapshot
     next_r = 5 + len(rows) + 1
-    s.cell(row=next_r, column=1, value="MD3 SNAPSHOT").font = H2
+    s.cell(row=next_r, column=1, value="CURRENT ROUND SNAPSHOT").font = H2
     next_r += 1
     s.cell(row=next_r, column=1, value="Formation")
-    s.cell(row=next_r, column=2, value=squad_by_id.get("s1_balanced_hunter", {}).get("formation", "—"))
-    s.cell(row=next_r, column=3, value=squad_by_id.get("s2_steady_banker", {}).get("formation", "—"))
-    s.cell(row=next_r, column=4, value=squad_by_id.get("s3_differential_max", {}).get("formation", "—"))
+    for col, mid in enumerate(MIDS, start=2):
+        s.cell(row=next_r, column=col, value=squad_by_id.get(mid, {}).get("formation", "—"))
     next_r += 1
     s.cell(row=next_r, column=1, value="Budget spent (£m)")
-    s.cell(row=next_r, column=2, value=squad_by_id.get("s1_balanced_hunter", {}).get("budget_spent_m", 0))
-    s.cell(row=next_r, column=3, value=squad_by_id.get("s2_steady_banker", {}).get("budget_spent_m", 0))
-    s.cell(row=next_r, column=4, value=squad_by_id.get("s3_differential_max", {}).get("budget_spent_m", 0))
+    for col, mid in enumerate(MIDS, start=2):
+        s.cell(row=next_r, column=col, value=squad_by_id.get(mid, {}).get("budget_spent_m", 0))
     next_r += 1
     s.cell(row=next_r, column=1, value="SB-band picks (actual)")
-    for col, sid in enumerate(["s1_balanced_hunter", "s2_steady_banker", "s3_differential_max"], start=2):
-        s.cell(row=next_r, column=col,
-               value=squad_by_id.get(sid, {}).get("sb_band_count", 0))
+    for col, mid in enumerate(MIDS, start=2):
+        s.cell(row=next_r, column=col, value=squad_by_id.get(mid, {}).get("sb_band_count", 0))
     next_r += 1
     s.cell(row=next_r, column=1, value="Projected pts (incl. captain)")
-    for col, sid in enumerate(["s1_balanced_hunter", "s2_steady_banker", "s3_differential_max"], start=2):
+    for col, mid in enumerate(MIDS, start=2):
         s.cell(row=next_r, column=col,
-               value=round(squad_by_id.get(sid, {}).get("projected_pts_with_captain", 0), 1))
+               value=round(squad_by_id.get(mid, {}).get("projected_pts_with_captain", 0), 1))
     next_r += 1
-
-    # Captain picks
     s.cell(row=next_r, column=1, value="Captain")
-    for col, sid in enumerate(["s1_balanced_hunter", "s2_steady_banker", "s3_differential_max"], start=2):
-        sq = squad_by_id.get(sid, {})
+    for col, mid in enumerate(MIDS, start=2):
+        sq = squad_by_id.get(mid, {})
         cap_id = sq.get("captain_id")
         cap = next((p for p in sq.get("starting_xi", []) if p["fantasy_player_id"] == cap_id), None)
         s.cell(row=next_r, column=col, value=f"{cap['known_name']} ({cap['nation_id']})" if cap else "—")
     next_r += 1
     s.cell(row=next_r, column=1, value="12th Man")
-    for col, sid in enumerate(["s1_balanced_hunter", "s2_steady_banker", "s3_differential_max"], start=2):
-        sq = squad_by_id.get(sid, {})
+    for col, mid in enumerate(MIDS, start=2):
+        sq = squad_by_id.get(mid, {})
         t = sq.get("twelfth_man")
         s.cell(row=next_r, column=col, value=f"{t['known_name']} ({t['nation_id']}) £{t['price']}" if t else "—")
-
     style_body(s, 5 + len(rows) + 1, next_r, len(headers))
-    set_widths(s, {1: 28, 2: 38, 3: 38, 4: 38})
+    set_widths(s, {1: 32, 2: 40, 3: 40, 4: 40})
 
     # Squad embedding
     section_r = next_r + 2
-    s.cell(row=section_r, column=1, value="STARTING XI (MD3 snapshot)").font = H2
+    s.cell(row=section_r, column=1, value="STARTING XI (current snapshot)").font = H2
     section_r += 1
     sub_headers = ["Slot"]
-    for sid in ["s1_balanced_hunter", "s2_steady_banker", "s3_differential_max"]:
-        sub_headers.append(squad_by_id.get(sid, {}).get("name", sid))
+    for mid in MIDS:
+        sub_headers.append(squad_by_id.get(mid, {}).get("name", mid))
     for j, h in enumerate(sub_headers, start=1):
         s.cell(row=section_r, column=j, value=h)
     style_header_row(s, section_r, len(sub_headers))
     section_r += 1
     for slot in range(11):
         s.cell(row=section_r, column=1, value=f"#{slot+1}")
-        for col, sid in enumerate(["s1_balanced_hunter", "s2_steady_banker", "s3_differential_max"], start=2):
-            sq = squad_by_id.get(sid, {})
+        for col, mid in enumerate(MIDS, start=2):
+            sq = squad_by_id.get(mid, {})
             xi = sq.get("starting_xi", [])
             if slot < len(xi):
                 p = xi[slot]
