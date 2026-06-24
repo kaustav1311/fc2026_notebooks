@@ -684,6 +684,418 @@ def score_players_for_round(round_id: int, fixture_profiles: pd.DataFrame) -> pd
     return base
 
 
+# ─── Section B-brackets: Player Strength Score (K's bracket model) ───────────
+# Replaces the additive Floor/Ceiling/Differential composition. Emits 5
+# brackets per player, with the fixture quality acting MULTIPLICATIVELY (B5)
+# so easy-fixture players dominate naturally regardless of raw talent.
+#
+# EV = (w1·B1 + w2·B2 + w3·B3 + w4·B4) × B5
+#
+# Each bracket is a 0-1 normalized sub-score (rank-percentile within position
+# so cross-position comparison is meaningful). B5 is a multiplier 0.2-1.8.
+
+# Position-routed stat lists for B2 (WC performance rating). Each stat is
+# converted to per-90 then rank-percentiled within position. Discipline
+# stats are inverse-percentiled (low = good).
+B2_STATS = {
+    "FWD": {
+        "positive": [
+            "fifa_wc_AttemptAtGoalOnTarget", "fifa_wc_AttemptAtGoal", "fifa_wc_XG",
+            "fifa_wc_NumberOfShotEndingSequences", "fifa_wc_TakeOnsCompleted",
+            "fifa_wc_SpeedRuns", "fifa_wc_attacking_reception_pct",
+            "fotmob_wc_touches_opp_box", "fifa_wc_Penalties",
+            "fifa_wc_Goals",
+        ],
+        "fdh_score": "avg_attacking_score",
+    },
+    "MID": {
+        "positive": [
+            "fifa_wc_Assists", "fifa_wc_PassesCompleted", "fifa_wc_pass_completion_pct",
+            "fifa_wc_CompletedBallProgressions", "fifa_wc_ball_progression_completion_pct",
+            "fifa_wc_CompletedSwitchesOfPlay", "fifa_wc_LinebreaksAttempted",
+            "fotmob_wc_chances_created", "fotmob_wc_big_chances_created",
+            "fifa_wc_NumberOfInvolvements",
+        ],
+        "fdh_score": "avg_creativity_score",
+    },
+    "DEF": {
+        "positive": [
+            "fifa_wc_DefensivePressuresApplied", "fifa_wc_ForcedTurnovers",
+            "fotmob_wc_tackles", "fotmob_wc_duels_won_pct",
+            "fifa_wc_CleanSheets", "fifa_wc_CrossesCompleted",
+            "fifa_wc_LinebreaksCompletedUnderPressure",
+        ],
+        "fdh_score": "avg_defensive_score",
+    },
+    "GK": {
+        "positive": [
+            "fifa_wc_GoalkeeperSaves", "fifa_wc_CleanSheets",
+            "fifa_wc_DistributionsCompletedUnderPressure",
+        ],
+        "fdh_score": "avg_defending_the_goal_score",
+    },
+}
+
+DISCIPLINE_STATS = ["fifa_wc_YellowCards", "fifa_wc_RedCards", "fifa_wc_FoulsAgainst"]
+
+# Default bracket weights (sums to 1.0). Strategies override these.
+DEFAULT_BRACKET_WEIGHTS = {
+    "w_b1_overall": 0.20,
+    "w_b2_wc_perf": 0.30,
+    "w_b3_external": 0.20,
+    "w_b4_fantasy": 0.30,
+}
+
+
+def _rank_pct(s: pd.Series, ascending: bool = True) -> pd.Series:
+    """Convert a numeric series to a 0-1 rank percentile. NaN -> 0.5 (median)."""
+    return s.rank(pct=True, ascending=ascending, na_option="keep").fillna(0.5)
+
+
+def _per90(stat: pd.Series, minutes: pd.Series, prior_per90: float = None) -> pd.Series:
+    """Per-90 with Bayesian shrinkage for low-minute samples.
+    Players with <90 min get pulled toward the position prior so they don't
+    dominate via tiny-sample-rate artifacts (one shot in 30 mins != elite finisher).
+    """
+    minutes = minutes.fillna(0).astype(float)
+    stat = stat.fillna(0).astype(float)
+    if prior_per90 is None:
+        # Use overall median per-90 as prior for any-data players
+        with np.errstate(divide="ignore", invalid="ignore"):
+            valid_per90 = stat[minutes >= 90] / (minutes[minutes >= 90] / 90)
+        prior_per90 = float(valid_per90.median()) if len(valid_per90) and pd.notna(valid_per90.median()) else 0.0
+    # Bayesian: (stat + prior_per90 * 90 * shrinkage_weight) / (minutes + 90 * shrinkage_weight)
+    # shrinkage_weight = 0.5 means we add 45 min of prior to every player
+    shrink_min = 45.0
+    return (stat + prior_per90 * shrink_min / 90) / ((minutes + shrink_min) / 90)
+
+
+def score_players_brackets(round_id: int, fixture_profiles: pd.DataFrame,
+                            bracket_weights: dict = None) -> pd.DataFrame:
+    """Score players using the 5-bracket Player Strength Score model.
+
+    Returns one row per (player, fixture) with:
+      b1_overall, b2_wc_perf, b3_external, b4_fantasy  → 0-1 sub-scores
+      b5_fixture_mult                                  → 0.2-1.8 multiplier
+      ev_bracket                                       → composite EV
+      Plus all identity / fixture columns from the prior pipeline.
+    """
+    if bracket_weights is None:
+        bracket_weights = DEFAULT_BRACKET_WEIGHTS
+
+    # ── Load player universe with full stg_players_view ─────────────────────
+    fp = pd.read_parquet(PROC / "fantasy_players.parquet")[
+        ["fantasy_player_id", "fifa_player_id", "fantasy_squad_id", "position",
+         "price", "percent_selected", "form", "total_points", "avg_points",
+         "last_round_points", "first_name", "last_name", "known_name",
+         "is_active", "round_points_json"]
+    ]
+    fp["one_to_watch"] = False
+    fp["injury"] = None
+    sq = pd.read_parquet(PROC / "fantasy_squads.parquet")[
+        ["fantasy_squad_id", "abbr", "name"]
+    ].rename(columns={"abbr": "nation_id", "name": "nation_name"})
+    fp = fp.merge(sq, on="fantasy_squad_id", how="left")
+
+    pv = pd.read_parquet(PROC / "wc26_stg_players_view.parquet")
+    # Drop collisions
+    pv = pv[[c for c in pv.columns if c not in {"position", "nation_id", "name"}]]
+    fp = fp.merge(pv, on="fifa_player_id", how="left")
+
+    # Power-rank scores
+    pr = pd.read_parquet(PROC / "wc26_stg_player_powerrank.parquet")[
+        ["fifa_player_id", "avg_attacking_score", "avg_defensive_score",
+         "avg_creativity_score", "avg_defending_the_goal_score"]
+    ]
+    fp = fp.merge(pr, on="fifa_player_id", how="left")
+
+    # SB totals
+    ft = pd.read_parquet(PROC / "wc26_stg_fantasy_player_totals.parquet")[
+        ["fantasy_player_id", "scouting_bonus", "tackles", "chances_created",
+         "shots_on_target"]
+    ].rename(columns={"scouting_bonus": "sb_total"})
+    fp = fp.merge(ft, on="fantasy_player_id", how="left")
+
+    # ── Cross-join with fixture profiles (home + away rows) ─────────────────
+    fx = fixture_profiles.copy()
+    fx_h = fx.copy()
+    fx_h["nation_id"] = fx_h["home_nation_id"]
+    fx_h["is_home"] = True
+    fx_h["opponent_nation_id"] = fx_h["away_nation_id"]
+    fx_h["team_cs_index"] = fx_h["cs_index_home"]
+    fx_h["opp_cs_index"] = fx_h["cs_index_away"]
+    fx_h["team_strength"] = fx_h["home_strength"]
+    fx_h["opp_strength"] = fx_h["away_strength"]
+    fx_h["heavy_hitter_team"] = fx_h.get("heavy_hitter_home", 0.5)
+    fx_h["heavy_hitter_opp"] = fx_h.get("heavy_hitter_away", 0.5)
+    fx_a = fx.copy()
+    fx_a["nation_id"] = fx_a["away_nation_id"]
+    fx_a["is_home"] = False
+    fx_a["opponent_nation_id"] = fx_a["home_nation_id"]
+    fx_a["team_cs_index"] = fx_a["cs_index_away"]
+    fx_a["opp_cs_index"] = fx_a["cs_index_home"]
+    fx_a["team_strength"] = fx_a["away_strength"]
+    fx_a["opp_strength"] = fx_a["home_strength"]
+    fx_a["heavy_hitter_team"] = fx_a.get("heavy_hitter_away", 0.5)
+    fx_a["heavy_hitter_opp"] = fx_a.get("heavy_hitter_home", 0.5)
+    fx_long = pd.concat([fx_h, fx_a], ignore_index=True)
+    fx_cols = ["fantasy_match_id", "espn_match_id", "fifa_match_id",
+               "nation_id", "opponent_nation_id", "is_home",
+               "goals_index", "team_cs_index", "opp_cs_index",
+               "p_home_win", "p_away_win", "p_draw", "p_btts",
+               "nation_strength_delta", "team_strength", "opp_strength",
+               "heavy_hitter_team", "heavy_hitter_opp",
+               "weather_cluster", "weather_draw_boost", "fifa_referee_id",
+               "trend_top_category", "trend_top_pct", "trend_top_confidence",
+               "fixture_shape", "mkt_composite_divergence",
+               "moneyline_lopsidedness", "stage", "espn_venue_name",
+               "roof_type", "surface", "temperature_c", "humidity_pct"]
+    fx_long = fx_long[[c for c in fx_cols if c in fx_long.columns]]
+
+    df = fp.merge(fx_long, on="nation_id", how="inner")
+
+    # Drop inactive players AFTER the merge so the cross-join is full
+    df = df[df["is_active"].fillna(True) == True].reset_index(drop=True)
+
+    minutes = df["fifa_wc_TimePlayed"].fillna(0).astype(float)
+
+    # ═══════ B1 PlayerOverall ═══════════════════════════════════════════════
+    # Composed within position: nation strength + club season + national team
+    # career + market value. Position-aware via club_senior_goals routing
+    # (FWD/MID weighted on goals; DEF/GK weighted on appearances).
+    ns = nation_strength_composite()
+    ns_lookup = ns.set_index("nation_id")["nation_total_strength"].to_dict()
+    nation_strength = df["nation_id"].map(ns_lookup).fillna(0.5)
+
+    club_apps = df.get("club_senior_appearances", pd.Series(0, index=df.index)).fillna(0)
+    club_rating = df.get("club_senior_weighted_avg_rating", pd.Series(6.5, index=df.index)).fillna(6.5)
+    club_goals = df.get("club_senior_goals", pd.Series(0, index=df.index)).fillna(0)
+    club_goals_per_app = club_goals / club_apps.replace(0, np.nan)
+    nat_apps = df.get("national_senior_appearances", pd.Series(0, index=df.index)).fillna(0)
+    nat_goals = df.get("national_senior_goals", pd.Series(0, index=df.index)).fillna(0)
+    nat_rating = df.get("national_senior_weighted_avg_rating", pd.Series(6.5, index=df.index)).fillna(6.5)
+    value = df.get("value_fotmob_latest_eur", pd.Series(1e6, index=df.index)).fillna(1e6)
+    log_value = np.log1p(value)
+
+    b1_components = pd.DataFrame({
+        "nation_strength": nation_strength,
+        "club_rating_pct": _rank_pct(club_rating),
+        "club_goals_per_app_pct": _rank_pct(club_goals_per_app),
+        "club_apps_pct": _rank_pct(club_apps),
+        "national_rating_pct": _rank_pct(nat_rating),
+        "national_goals_pct": _rank_pct(nat_goals / nat_apps.replace(0, np.nan)),
+        "log_value_pct": _rank_pct(log_value),
+    })
+    # Position-conditional weighting
+    pos = df["position"].fillna("MID")
+    b1_w_attack = pos.isin(["FWD", "MID"]).astype(float)
+    b1 = (
+        0.20 * b1_components["nation_strength"]
+        + 0.15 * b1_components["club_rating_pct"]
+        + 0.15 * b1_components["club_goals_per_app_pct"] * b1_w_attack
+        + 0.10 * b1_components["club_apps_pct"]
+        + 0.10 * b1_components["national_rating_pct"]
+        + 0.15 * b1_components["national_goals_pct"] * b1_w_attack
+        + 0.15 * b1_components["log_value_pct"]
+    )
+    # Renormalize because attack-only components sometimes contribute 0 (DEF/GK)
+    b1 = (b1 / b1.max()).clip(0, 1) if b1.max() > 0 else b1
+
+    # ═══════ B2 WCPerfRating ════════════════════════════════════════════════
+    # Position-routed per-90 stats from fifa_wc_* + fotmob_wc_* + FDH power-rank.
+    # Bayesian shrinkage for low-minute samples.
+    b2 = pd.Series(0.5, index=df.index)
+    for pos_label, spec in B2_STATS.items():
+        mask = (pos == pos_label)
+        if mask.sum() == 0:
+            continue
+        sub_idx = df[mask].index
+        sub_minutes = minutes.loc[sub_idx]
+        pos_score = pd.Series(0.0, index=sub_idx)
+        n_stats = 0
+        # Positive stats: each is per-90 then rank-percentile within position
+        for col in spec["positive"]:
+            if col not in df.columns:
+                continue
+            stat_vals = df[col].loc[sub_idx].fillna(0).astype(float)
+            if col.endswith("_pct"):
+                # percent stats already 0-100, use rank directly
+                pct = _rank_pct(stat_vals)
+            else:
+                p90 = _per90(stat_vals, sub_minutes)
+                pct = _rank_pct(p90)
+            pos_score = pos_score + pct
+            n_stats += 1
+        if n_stats > 0:
+            pos_score = pos_score / n_stats
+        # Add FDH power-rank score (already 0-1ish), weighted ~30%
+        fdh_col = spec["fdh_score"]
+        if fdh_col in df.columns:
+            fdh_pct = _rank_pct(df[fdh_col].loc[sub_idx])
+            pos_score = 0.7 * pos_score + 0.3 * fdh_pct
+        b2.loc[sub_idx] = pos_score
+    # Discipline penalty: subtract 10% of inverse-disciplined percentile
+    disc_score = pd.Series(0.0, index=df.index)
+    for col in DISCIPLINE_STATS:
+        if col in df.columns:
+            p90 = _per90(df[col].fillna(0), minutes)
+            disc_score = disc_score + _rank_pct(p90, ascending=False)
+    disc_score = disc_score / max(1, len([c for c in DISCIPLINE_STATS if c in df.columns]))
+    b2 = (0.9 * b2 + 0.1 * disc_score).clip(0, 1)
+
+    # ═══════ B3 ExternalRatings ═════════════════════════════════════════════
+    fotmob_rating = df.get("fotmob_wc_fotmob_rating", pd.Series(6.5, index=df.index)).fillna(6.5)
+    fifa_rating = df.get("wc_rating", pd.Series(6.5, index=df.index)).fillna(6.5)
+    r5 = df.get("recent5_fotmob_rating", pd.Series(6.5, index=df.index)).fillna(6.5)
+    r10 = df.get("recent10_fotmob_rating", pd.Series(6.5, index=df.index)).fillna(6.5)
+    r15 = df.get("recent15_fotmob_rating", pd.Series(6.5, index=df.index)).fillna(6.5)
+    blended_form = 0.5 * r5 + 0.3 * r10 + 0.2 * r15
+    b3 = (
+        0.35 * _rank_pct(fotmob_rating)
+        + 0.25 * _rank_pct(fifa_rating)
+        + 0.40 * _rank_pct(blended_form)
+    ).clip(0, 1)
+
+    # ═══════ B4 FantasyMeta ═════════════════════════════════════════════════
+    form = df["form"].fillna(df["form"].median()).astype(float)
+    avg_pts = df["avg_points"].fillna(0).astype(float)
+    total_pts = df["total_points"].fillna(0).astype(float)
+    last_round = df["last_round_points"].fillna(0).astype(float)
+    sb_tot = df["sb_total"].fillna(0).astype(float)
+    pct_sel = df["percent_selected"].fillna(50.0).astype(float)
+
+    # Consistency: 1 - std/mean of round_points_json (high = more consistent)
+    def _consistency(j):
+        if not j: return 0.5
+        try:
+            vals = list(json.loads(j).values()) if isinstance(j, str) else list(j.values())
+            vals = [v for v in vals if v is not None]
+            if len(vals) < 2: return 0.5
+            mean = sum(vals) / len(vals)
+            if mean <= 0: return 0.0
+            import statistics
+            std = statistics.stdev(vals)
+            return max(0.0, min(1.0, 1 - std / max(mean, 1)))
+        except Exception:
+            return 0.5
+    consistency = df["round_points_json"].apply(_consistency)
+
+    # Differential boost: sigmoid 5% gate × (1 + 0.2×sb_total)
+    sb_prob = 1 / (1 + np.exp((pct_sel - 5.0) / 1.0))
+    sb_boost = sb_prob * (1 + 0.2 * sb_tot.clip(0, 5))
+
+    b4 = (
+        0.25 * _rank_pct(form)
+        + 0.25 * _rank_pct(avg_pts)
+        + 0.20 * _rank_pct(total_pts)
+        + 0.10 * _rank_pct(last_round)
+        + 0.10 * _rank_pct(consistency)
+        + 0.10 * _rank_pct(sb_boost)
+    ).clip(0, 1)
+
+    # ═══════ B5 FixtureMultiplier — THE KEY ════════════════════════════════
+    # Position-conditional fixture quality. Composed multiplicatively from §A
+    # factors. Range 0.2-1.8. FWD/MID Ceiling-oriented; DEF/GK Floor-oriented.
+    goals_idx = df["goals_index"].fillna(0.5).astype(float)
+    team_cs = df["team_cs_index"].fillna(0.3).astype(float)
+    opp_strength = df["opp_strength"].fillna(0.5).astype(float)
+    heavy_hitter = df["heavy_hitter_team"].fillna(0.5).astype(float)
+    trend_conf = df["trend_top_confidence"].fillna(0.5).astype(float) if "trend_top_confidence" in df.columns else pd.Series(0.5, index=df.index)
+    stage_str = df["stage"].fillna("group").str.lower()
+    stage_mult = stage_str.map({
+        "group_a": 1.00, "group_b": 1.00, "group_c": 1.00, "group_d": 1.00,
+        "group_e": 1.00, "group_f": 1.00, "group_g": 1.00, "group_h": 1.00,
+        "group_i": 1.00, "group_j": 1.00, "group_k": 1.00, "group_l": 1.00,
+        "group": 1.00, "r32": 1.15, "r16": 1.25, "qf": 1.40, "sf": 1.55, "final": 1.55,
+    }).fillna(1.00)
+
+    # Position-conditional fixture quality
+    fwd_mid_fix = (
+        (0.5 + goals_idx)                  # 0.5-1.5: high-goal fixtures amplify
+        * (1.0 + (1 - opp_strength) * 0.3) # weaker opp adds up to 30%
+        * (1.0 + heavy_hitter * 0.15)      # clutch teams add 15%
+    )
+    def_gk_fix = (
+        (0.6 + team_cs)                    # 0.6-1.6: high-CS-prob fixtures amplify
+        * (1.0 + (1 - opp_strength) * 0.4) # weak opp attack adds 40%
+        * (1.0 + heavy_hitter * 0.10)
+    )
+    base_fix = np.where(pos.isin(["FWD", "MID"]), fwd_mid_fix, def_gk_fix)
+    base_fix = pd.Series(base_fix, index=df.index)
+
+    # Modifiers
+    weather_drag = pd.Series(0.0, index=df.index)
+    if "weather_cluster" in df.columns:
+        cluster_drag = df["weather_cluster"].map({0: 0.0, 1: 0.08, 2: 0.12, 3: 0.0}).fillna(0.0)
+        weather_drag = cluster_drag
+    # Trend confidence: 0.5 baseline maps to 1.0 modifier; high confidence -> 1.15
+    trend_mod = 1.0 + (trend_conf - 0.5) * 0.3
+    # Mkt-composite divergence: if "market_overconfident" upset opportunity, boost differentials
+    mkt_div = df["mkt_composite_divergence"].fillna(0.0).astype(float) if "mkt_composite_divergence" in df.columns else pd.Series(0.0, index=df.index)
+    div_mod = 1.0 + mkt_div * 0.10  # up to 10% boost when market disagrees
+
+    b5 = (base_fix * stage_mult * (1 - weather_drag) * trend_mod * div_mod).clip(0.20, 1.80)
+
+    # ═══════ Composite EV ════════════════════════════════════════════════════
+    bracket_sum = (
+        bracket_weights["w_b1_overall"] * b1
+        + bracket_weights["w_b2_wc_perf"] * b2
+        + bracket_weights["w_b3_external"] * b3
+        + bracket_weights["w_b4_fantasy"] * b4
+    )
+    # Scale bracket sum to fantasy-points scale (rough): ~6 pts is a starter
+    # baseline, brackets sum to 0-1; multiply by 12 so sum*B5 gives a 0-22 range
+    # that matches typical FIFA round scores.
+    ev_bracket = bracket_sum * 12.0 * b5
+
+    # ═══════ Output assembly ════════════════════════════════════════════════
+    base_cols = ["fantasy_player_id", "fifa_player_id", "nation_id", "nation_name",
+                 "opponent_nation_id", "is_home", "fantasy_match_id",
+                 "espn_match_id", "position", "price", "percent_selected",
+                 "first_name", "last_name", "known_name", "is_active",
+                 "one_to_watch", "injury", "sb_total", "form",
+                 "avg_points", "total_points", "last_round_points",
+                 "goals_index", "team_cs_index", "opp_cs_index",
+                 "team_strength", "opp_strength", "heavy_hitter_team",
+                 "nation_strength_delta", "moneyline_lopsidedness",
+                 "trend_top_category", "trend_top_pct", "trend_top_confidence",
+                 "fixture_shape", "mkt_composite_divergence",
+                 "weather_cluster", "stage", "roof_type", "surface"]
+    base = df[[c for c in base_cols if c in df.columns]].copy()
+    base["b1_overall"] = b1.round(3)
+    base["b2_wc_perf"] = b2.round(3)
+    base["b3_external"] = b3.round(3)
+    base["b4_fantasy"] = b4.round(3)
+    base["b5_fixture_mult"] = b5.round(3)
+    base["bracket_sum"] = bracket_sum.round(3)
+    base["ev_bracket"] = ev_bracket.round(2)
+    base["round_id"] = round_id
+
+    # ── Backward-compat aliases so the existing assembler + suggestor + chip
+    # tagger keep working without a rewrite. Floor ≈ defense-oriented bracket
+    # component (B1+B4) × B5; Ceiling ≈ attack-oriented (B2+B3) × B5;
+    # Differential = B4's SB-boost sub-component directly. EV mirrors ev_bracket
+    # across all 3 mode-suffixed columns since modes are now subsumed by B2's
+    # internal per-90 normalization.
+    floor_proxy = ((b1 + b4) * 0.5 * 12 * b5).clip(0, 30)
+    ceiling_proxy = ((b2 + b3) * 0.5 * 12 * b5).clip(0, 30)
+    base["floor_p90"] = floor_proxy.round(2)
+    base["floor_per_app"] = floor_proxy.round(2)
+    base["floor_totals"] = floor_proxy.round(2)
+    base["ceiling_p90"] = ceiling_proxy.round(2)
+    base["ceiling_per_app"] = ceiling_proxy.round(2)
+    base["ceiling_totals"] = ceiling_proxy.round(2)
+    base["ev_raw_p90"] = ev_bracket.round(2)
+    base["ev_raw_per_app"] = ev_bracket.round(2)
+    base["ev_raw_totals"] = ev_bracket.round(2)
+    # Differential alias from the SB-boost sub-component of B4
+    base["differential"] = (sb_boost * 2).round(2)
+    base["start_prob"] = df["recent5_started_pct"].fillna(
+        df["recent10_started_pct"]).fillna(0.5).clip(0, 1).round(3)
+
+    return base
+
+
 # ─── Section C.5: Archetype mining v2 (rich FIFA stat) ───────────────────────
 
 

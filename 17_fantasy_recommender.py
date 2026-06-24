@@ -25,7 +25,7 @@ sys.path.insert(0, str(ROOT))
 
 from lib.recommender import (
     assemble_fixture_profile,
-    score_players_for_round,
+    score_players_brackets,
     mine_archetypes_v2,
     attach_archetypes,
     apply_filters,
@@ -118,9 +118,9 @@ def main():
     fx = assemble_fixture_profile(target)
     print(f"[17]   {len(fx)} fixtures for round {target}")
 
-    # 3. Player scoring (all 3 modes)
-    print("[17] scoring players in 3 normalization modes…")
-    scored = score_players_for_round(target, fx)
+    # 3. Player scoring via 5-bracket Player Strength Score model
+    print("[17] scoring players via bracket model (B1-B5)…")
+    scored = score_players_brackets(target, fx)
 
     # 4. Archetype enrichment
     scored = attach_archetypes(scored, retro, prospective)
@@ -167,6 +167,10 @@ def main():
         "known_name", "first_name", "last_name",
         "sb_total", "form", "avg_points", "total_points", "last_round_points",
         "start_prob", "differential", "anti_pick",
+        # Bracket model (B1-B5 + composite)
+        "b1_overall", "b2_wc_perf", "b3_external", "b4_fantasy",
+        "b5_fixture_mult", "bracket_sum", "ev_bracket",
+        # Back-compat aliases for the existing assembler / suggestor / UI
         "floor_p90", "ceiling_p90", "ev_raw_p90",
         "floor_per_app", "ceiling_per_app", "ev_raw_per_app",
         "floor_totals", "ceiling_totals", "ev_raw_totals",
@@ -185,7 +189,8 @@ def main():
     records = df_to_records(scored[client_cols])
     out_json = PROC / "wc26_fantasy_recommendations.json"
     out_json.write_text(json.dumps(records, default=str))
-    print(f"[17]   wrote {out_json} ({len(records)} rows)")
+    (PWA_JSON / "wc26_fantasy_recommendations.json").write_text(json.dumps(records, default=str))
+    print(f"[17]   wrote {out_json} + PWA copy ({len(records)} rows)")
 
     # ─── Phase D: position suggestor + strategy squads ──────────────────────
     print("[17] building position suggestor (Top 15 + Look out for)…")
@@ -215,6 +220,26 @@ def main():
     sqd_path.write_text(json.dumps(squads, default=str))
     (PWA_JSON / "wc26_fantasy_strategy_squads.json").write_text(json.dumps(squads, default=str))
     print(f"[17]   wrote {sqd_path}  ({len(squads)} strategies)")
+
+    # ─── Historical snapshot (pre-round-lock freeze) ───────────────────────
+    # Every tick writes a timestamped snapshot. After a round completes, the
+    # final pre-lock snapshot (newest with timestamp BEFORE round start) is the
+    # "committed" prediction for round-tracking. Phase F joins this against
+    # fantasy_player_round_stats to produce per-strategy round actuals.
+    print("[17] writing historical round-lock snapshot…")
+    history_dir = PROC / "history" / f"round_{target:02d}"
+    history_dir.mkdir(parents=True, exist_ok=True)
+    safe_ts = snapshot_ts.replace(":", "-").replace("+00:00", "Z").split(".")[0]
+    snap_path = history_dir / f"snapshot_{safe_ts}.json"
+    snap_path.write_text(json.dumps({
+        "round_id": target,
+        "snapshot_ts": snapshot_ts,
+        "model_version": "brackets_v1",  # bumps on scoring-formula changes
+        "recommendations": records,
+        "position_suggestor": suggestor,
+        "strategy_squads": squads,
+    }, default=str))
+    print(f"[17]   wrote {snap_path} ({snap_path.stat().st_size // 1024} KB)")
 
     return scored
 
