@@ -1,11 +1,11 @@
 # Recommender Factor Signal — EDA Report
 
-Generated: 2026-06-24T13:02:00.248403+00:00
+Generated: 2026-06-24T12:32:58.104014+00:00
 Closed observations: **1388 (player, round)** rows across rounds [1, 2]
 Position breakdown: {'MID': 524, 'DEF': 451, 'FWD': 323, 'GK': 90}
 
 Ground truth: `points` (actual fantasy points scored). Distribution: mean=3.00, std=3.59, max=24, p95=10
-
+ 
 > All correlations below use Pearson. 'corr' is signed (+ means more-of-this → more points). Sample sizes drop when a feature is null — those rows are excluded.
 
 ## 1. Polymarket calibration (per market type)
@@ -160,121 +160,16 @@ Top-20% threshold: ≥5 pts. 282 top-performance rows.
 | POPULAR_MID_BALANCED           |  44 |     12.100 | David (Canada, R2, 24pt), Gakpo (Netherlands, R2, 19pt), Ueda (Japan, R2, 18pt)                          |
 | DIFFERENTIAL_MID_BALANCED_c7   |   1 |      9.000 | Mahmic (Bosnia and Herzegovina, R2, 9pt)                                                                 |
 
-## 8. Implied vs proposed constants (per K: top-N not top-quartile)
+## 8. Implied vs proposed constants
 
-
-Elite cohort = top 50 player-rounds (min=11 pts, max=24 pts).
-| threshold                                              |   proposed |   data_implied | evidence                                                               |
-|:-------------------------------------------------------|-----------:|---------------:|:-----------------------------------------------------------------------|
-| MID tackles_per_app floor                              |      4.500 |          0.500 | 25th pctile among top-50 MID picks (n=17)                              |
-| MID tackles_per_90min floor (using fifa_wc_TimePlayed) |      4.500 |          0.520 | per-minute variant — K's preferred normalization                       |
-| MID chances_created_per_app floor                      |      1.500 |          0.000 | 25th pctile among top-50 MID picks                                     |
-| MID fotmob_wc_chances_created total floor              |    nan     |          1.000 | using stg_players_view total directly (K's note: refer to fotmob data) |
-| SB ownership gate — MEDIAN of SB earners               |      5.000 |          0.600 | 233 SB-earning obs; 75th pctile=1.9%, max=6.8%                         |
-| Form floor for elite (top-N)                           |      6.000 |          4.700 | 25th pctile among top-50 player-rounds; median=5.85                    |
-| recent5_fotmob_rating floor for elite                  |      7.000 |          7.110 | 25th pctile among top-50; independent of points autocorrelation        |
-| FWD avg_attacking_score floor                          |      0.700 |          6.219 | 25th pctile among top-50 FWD picks (n=21)                              |
-| DEF avg_defensive_score floor                          |      0.700 |          5.766 | 25th pctile among top-50 DEF picks (n=8)                               |
-| MID avg_creativity_score floor                         |      0.700 |          6.130 | 25th pctile among top-50 MID picks (n=17)                              |
+| threshold                                 |   proposed |   data_implied | evidence                                       |
+|:------------------------------------------|-----------:|---------------:|:-----------------------------------------------|
+| MID tackles_per_app floor                 |      4.500 |          3.000 | point-mean rises above 3.8 at this bin         |
+| MID chances_created_per_app floor         |      1.500 |          0.000 | same step-rise detection                       |
+| SB ownership gate (max % seen earning SB) |      5.000 |          6.800 | 233 SB-earning observations in MD1+MD2         |
+| Form floor for top-quartile pts           |      6.000 |          2.700 | 25th pctile of form among top-quartile scorers |
 
 _K to override the `proposed` column where data_implied differs — copy this table into the catalog._
-
-## 2b. Surface + roof overlay correlation
-
-**By surface type:**
-| surface       |   n |   mean_total_goals |   draw_rate |   mean_margin |
-|:--------------|----:|-------------------:|------------:|--------------:|
-| grass         |  20 |              2.850 |       0.300 |         1.650 |
-| grass_overlay |  23 |              3.217 |       0.304 |         1.739 |
-
-**By roof type:**
-| roof_type   |   n |   mean_total_goals |   draw_rate |   mean_margin |
-|:------------|----:|-------------------:|------------:|--------------:|
-| fixed       |   4 |              3.500 |       0.500 |         1.500 |
-| open        |  27 |              2.630 |       0.259 |         1.444 |
-| retractable |  12 |              3.833 |       0.333 |         2.333 |
-
-**Read**: differences in mean_total_goals + draw_rate across surface/roof categories quantify the stadium effect. With MD1+MD2 sample sizes, treat as directional only.
-
-## 10. Broad correlation sweep — every numeric stg_players_view column vs points
-
-
-K asked: are we using the 100+ FIFA stats from stg_players_view? Now we are. df has **237 cols** total. Scanning all numeric ones for predictive signal against `points` per position. Reports the top-30 by max-|corr| across positions.
-
-**Top 30 numeric stg_players_view factors by max |corr| across positions:**
-| factor                        |   DEF |   FWD |      GK |   MID |   max_abs |
-|:------------------------------|------:|------:|--------:|------:|----------:|
-| B8 goals_per_app              | 0.311 | 0.879 | nan     | 0.752 |     0.879 |
-| avg_points                    | 0.754 | 0.822 |   0.676 | 0.831 |     0.831 |
-| total_points                  | 0.713 | 0.800 |   0.671 | 0.774 |     0.800 |
-| C5 form_fifa                  | 0.712 | 0.799 |   0.671 | 0.773 |     0.799 |
-| form                          | 0.712 | 0.799 |   0.671 | 0.773 |     0.799 |
-| fifa_wc_Goals                 | 0.229 | 0.720 | nan     | 0.636 |     0.720 |
-| last_round_points             | 0.587 | 0.691 |   0.521 | 0.694 |     0.694 |
-| C5 last_round_pts             | 0.587 | 0.691 |   0.521 | 0.694 |     0.694 |
-| sb_total                      | 0.614 | 0.535 |   0.410 | 0.682 |     0.682 |
-| fotmob_wc_fotmob_rating       | 0.468 | 0.677 |   0.494 | 0.585 |     0.677 |
-| wc_rating                     | 0.468 | 0.677 |   0.494 | 0.585 |     0.677 |
-| shots_on_target_total         | 0.197 | 0.660 | nan     | 0.476 |     0.660 |
-| B7 sot_per_app (FWD)          | 0.202 | 0.653 | nan     | 0.506 |     0.653 |
-| avg_attacking_score           | 0.249 | 0.631 | nan     | 0.632 |     0.632 |
-| B14 power_atk_score           | 0.249 | 0.631 | nan     | 0.632 |     0.632 |
-| fifa_wc_XG                    | 0.165 | 0.631 | nan     | 0.361 |     0.631 |
-| fifa_wc_AttemptAtGoalOnTarget | 0.202 | 0.588 | nan     | 0.440 |     0.588 |
-| C1 fifa_wc_sot_total          | 0.202 | 0.588 | nan     | 0.440 |     0.588 |
-| recent5_goals                 | 0.187 | 0.533 | nan     | 0.444 |     0.533 |
-| fifa_wc_AttemptAtGoal         | 0.163 | 0.484 | nan     | 0.254 |     0.484 |
-| price                         | 0.220 | 0.478 |   0.134 | 0.199 |     0.478 |
-| D1 percent_selected_inverse   | 0.188 | 0.465 |   0.274 | 0.195 |     0.465 |
-| percent_selected              | 0.188 | 0.465 |   0.274 | 0.195 |     0.465 |
-| recent5_fotmob_rating         | 0.338 | 0.462 |   0.436 | 0.393 |     0.462 |
-| C5 recent5_rating             | 0.338 | 0.462 |   0.436 | 0.393 |     0.462 |
-| recent10_goals                | 0.142 | 0.457 | nan     | 0.361 |     0.457 |
-| recent15_goals                | 0.132 | 0.456 | nan     | 0.315 |     0.456 |
-| recent5_player_of_the_match   | 0.069 | 0.453 |   0.233 | 0.295 |     0.453 |
-| fifa_wc_CleanSheets           | 0.382 | 0.045 |   0.440 | 0.047 |     0.440 |
-| fifa_wc_Assists               | 0.209 | 0.352 | nan     | 0.424 |     0.424 |
-
-**Surprises to add to the catalog** (factors NOT in current §B/§C that show ≥0.30 max-corr):
-- **B8 goals_per_app** — max|corr|=0.88
-- **avg_points** — max|corr|=0.83
-- **total_points** — max|corr|=0.80
-- **C5 form_fifa** — max|corr|=0.80
-- **fifa_wc_Goals** — max|corr|=0.72
-- **C5 last_round_pts** — max|corr|=0.69
-- **sb_total** — max|corr|=0.68
-- **fotmob_wc_fotmob_rating** — max|corr|=0.68
-- **wc_rating** — max|corr|=0.68
-- **shots_on_target_total** — max|corr|=0.66
-- **B7 sot_per_app (FWD)** — max|corr|=0.65
-- **B14 power_atk_score** — max|corr|=0.63
-- **fifa_wc_XG** — max|corr|=0.63
-- **C1 fifa_wc_sot_total** — max|corr|=0.59
-- **recent5_goals** — max|corr|=0.53
-- **fifa_wc_AttemptAtGoal** — max|corr|=0.48
-- **price** — max|corr|=0.48
-- **D1 percent_selected_inverse** — max|corr|=0.47
-- **C5 recent5_rating** — max|corr|=0.46
-- **recent10_goals** — max|corr|=0.46
-- **recent15_goals** — max|corr|=0.46
-- **recent5_player_of_the_match** — max|corr|=0.45
-- **fifa_wc_CleanSheets** — max|corr|=0.44
-- **fifa_wc_Assists** — max|corr|=0.42
-
-## 11. Prospective archetypes (past-season club form + market value)
-
-
-Separate from §7's retrospective archetypes (mined from MD1+MD2 top scorers), these are PROSPECTIVE — cluster the entire 1488 player pool by past-season club performance + market value + national-team profile. Useful for early-round picks where WC sample is thin.
-
-6 prospective archetypes. Saved to `data/eda/archetypes_prospective.json`.
-| name                         |   n |   mean_value_m |   mean_apps | exemplars                                                          |
-|:-----------------------------|----:|---------------:|------------:|:-------------------------------------------------------------------|
-| EMERGING_VETERAN_Midfielder  | 348 |          6.000 |     416.700 | Joshua KIMMICH (GER), Youri TIELEMANS (BEL), Mikel OYARZABAL (ESP) |
-| EMERGING_MID_CAREER_Defender | 582 |          4.600 |     179.400 | Robin ROEFS (NED), Zion Suzuki (JPN), Carney CHUKWUEMEKA (AUT)     |
-| MEGASTAR_VETERAN_Forward     |  50 |         93.700 |     314.600 | Lamine YAMAL (ESP), Michael OLISE (FRA), Erling HAALAND (NOR)      |
-| EMERGING_VETERAN_Forward     |  28 |         11.500 |     621.600 | Harry KANE (ENG), BRUNO FERNANDES (POR), MOHAMED SALAH (EGY)       |
-| ESTABLISHED_VETERAN_Forward  | 203 |         37.000 |     246.700 | Micky VAN DE VEN (NED), Nick WOLTEMADE (GER), Marc GUEHI (ENG)     |
-| EMERGING_YOUNG_Defender      |  35 |          0.400 |      76.100 | Ermin MAHMIC (BIH), Mouhib CHAMAKH (TUN), JASSEM GABER (QAT)       |
 
 ## 9. Nation-strength composite validation (§I)
 
@@ -315,4 +210,4 @@ Separate from §7's retrospective archetypes (mined from MD1+MD2 top scorers), t
 | CUW         |          88 |                   0.153 |
 | JOR         |          64 |                   0.166 |
 | UZB         |          57 |                   0.176 |
-| PAN         |          41 |                   0.178 |
+| PAN         |          41 |                   0.178 |s
