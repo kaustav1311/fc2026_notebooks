@@ -92,6 +92,47 @@ def df_to_records(df: pd.DataFrame) -> list[dict]:
     return out
 
 
+def sanitize_for_js(obj):
+    """Recursively walk a dict/list and replace NaN/Infinity floats with None.
+
+    JavaScript's JSON.parse() throws SyntaxError on `NaN` and `Infinity`
+    tokens — they're not in the JSON spec — while Python's json.dumps writes
+    them by default. Anything bound for the PWA must be sanitized first.
+    """
+    import math
+    if isinstance(obj, dict):
+        return {k: sanitize_for_js(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [sanitize_for_js(v) for v in obj]
+    if isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+        return obj
+    if isinstance(obj, np.floating):
+        f = float(obj)
+        if math.isnan(f) or math.isinf(f):
+            return None
+        return f
+    if isinstance(obj, np.integer):
+        return int(obj)
+    if isinstance(obj, np.bool_):
+        return bool(obj)
+    if isinstance(obj, pd.Timestamp):
+        return None if pd.isna(obj) else obj.isoformat()
+    # pd.NA / np.nan that survived as scalar
+    try:
+        if pd.isna(obj):
+            return None
+    except (TypeError, ValueError):
+        pass
+    return obj
+
+
+def dump_js_safe(obj) -> str:
+    """JSON dump that's guaranteed JS-parseable: no NaN, no Infinity."""
+    return json.dumps(sanitize_for_js(obj), default=str, allow_nan=False)
+
+
 def main():
     snapshot_ts = datetime.now(timezone.utc).isoformat()
     target = pick_target_round()
@@ -188,8 +229,9 @@ def main():
     client_cols = [c for c in client_cols if c in scored.columns]
     records = df_to_records(scored[client_cols])
     out_json = PROC / "wc26_fantasy_recommendations.json"
-    out_json.write_text(json.dumps(records, default=str))
-    (PWA_JSON / "wc26_fantasy_recommendations.json").write_text(json.dumps(records, default=str))
+    safe_recs = dump_js_safe(records)
+    out_json.write_text(safe_recs)
+    (PWA_JSON / "wc26_fantasy_recommendations.json").write_text(safe_recs)
     print(f"[17]   wrote {out_json} + PWA copy ({len(records)} rows)")
 
     # ─── Phase D: position suggestor + strategy squads ──────────────────────
@@ -198,8 +240,9 @@ def main():
     suggestor["target_round_id"] = target
     suggestor["snapshot_ts"] = snapshot_ts
     sug_path = PROC / "wc26_fantasy_position_suggestor.json"
-    sug_path.write_text(json.dumps(suggestor, default=str))
-    (PWA_JSON / "wc26_fantasy_position_suggestor.json").write_text(json.dumps(suggestor, default=str))
+    safe_sug = dump_js_safe(suggestor)
+    sug_path.write_text(safe_sug)
+    (PWA_JSON / "wc26_fantasy_position_suggestor.json").write_text(safe_sug)
     print(f"[17]   wrote {sug_path}  top15={len(suggestor['top_15_overall'])}  "
           f"look_out_for={sum(len(v) for v in suggestor['look_out_for'].values())}")
 
@@ -217,8 +260,9 @@ def main():
               f"SB-band={sq['sb_band_count']}/{strat['sb_quota']}+  proj={sq['projected_pts_with_captain']:.1f}")
 
     sqd_path = PROC / "wc26_fantasy_strategy_squads.json"
-    sqd_path.write_text(json.dumps(squads, default=str))
-    (PWA_JSON / "wc26_fantasy_strategy_squads.json").write_text(json.dumps(squads, default=str))
+    safe_sq = dump_js_safe(squads)
+    sqd_path.write_text(safe_sq)
+    (PWA_JSON / "wc26_fantasy_strategy_squads.json").write_text(safe_sq)
     print(f"[17]   wrote {sqd_path}  ({len(squads)} strategies)")
 
     # ─── Historical snapshot (pre-round-lock freeze) ───────────────────────
