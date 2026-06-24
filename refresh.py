@@ -218,10 +218,21 @@ def main(argv: list[str] | None = None) -> int:
         if not stems:
             print("[refresh] no work for this tick (out of tournament window, no --bucket override)")
             return 0
-        targets = [ROOT / f"{s}.ipynb" for s in stems]
-        missing = [t for t in targets if not t.exists()]
-        if missing:
-            print(f"[refresh] missing notebooks: {', '.join(m.name for m in missing)}")
+        # Each bundle entry resolves to either {stem}.ipynb or {stem}.py
+        # (some refresh steps — 17_fantasy_recommender — are plain Python).
+        targets = []
+        missing_stems = []
+        for s in stems:
+            ipynb = ROOT / f"{s}.ipynb"
+            py = ROOT / f"{s}.py"
+            if ipynb.exists():
+                targets.append(ipynb)
+            elif py.exists():
+                targets.append(py)
+            else:
+                missing_stems.append(s)
+        if missing_stems:
+            print(f"[refresh] missing notebooks: {', '.join(missing_stems)}")
             return 2
 
     # Inside the tournament window a 3 h tick MEANS "refresh" — the cache
