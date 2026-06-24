@@ -32,8 +32,8 @@ Why: the staging layer is a stable contract. Source-parquet column names can chu
 | Bucket | Notebooks (in order) | Cron | Latency to "truth" |
 |---|---|---|---|
 | Frozen | `01_nations`, `02_stadiums` | manual | seconds (only changes on schema edit) |
-| Daily | `06_players`, `08_player_enrichment`, `04_referees` | 07:00 UTC | up to 24 h on slow-moving fields |
-| **Hourly (every 3 h)** | `03_matches`, `05_referee_assignments`, `07_player_match_stats`, `09_player_season_stats`, `10_fifa_fantasy`, `11_fotmob_wc_and_form`, `12_match_weather`, `13_polymarket`, `14_staging_core`, `15_staging_matches`, `16_staging_players` | `0 */3 * * *` | **3 h max** |
+| Daily | `06_players`, `04_referees` | 07:00 UTC | up to 24 h on slow-moving fields |
+| **Hourly (every 3 h)** | `03_matches`, `05_referee_assignments`, `07_player_match_stats`, `08_player_enrichment`, `09_player_season_stats`, `10_fifa_fantasy`, `11_fotmob_wc_and_form`, `12_match_weather`, `13_polymarket`, `14_staging_core`, `15_staging_matches`, `16_staging_players` | `0 */3 * * *` | **3 h max** |
 
 The three staging notebooks (`14`, `15`, `16`) run last on every hourly tick, so the five `wc26_stg_*` parquets are always consistent with whatever just landed upstream — never a torn read.
 

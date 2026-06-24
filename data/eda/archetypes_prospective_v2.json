@@ -1,0 +1,203 @@
+{
+  "mode": "prospective",
+  "k": 8,
+  "silhouette": 0.5425943150724707,
+  "feature_cols": [
+    "price",
+    "percent_selected"
+  ],
+  "archetypes": [
+    {
+      "cluster_id": 0,
+      "name": "BUDGET_MID_CS_TOTALDISTANCE_DIFF",
+      "n": 443,
+      "mean_pts": 2.0609480812641086,
+      "exemplars": [
+        {
+          "known_name": "Jes\u00fas Gallardo",
+          "total_pts": 18.0
+        },
+        {
+          "known_name": "Yasin Ayari",
+          "total_pts": 18.0
+        },
+        {
+          "known_name": "Kevin Pina",
+          "total_pts": 14.0
+        }
+      ],
+      "centroid": {
+        "price": 4.835891647855531,
+        "percent_selected": 0.24898419864559818
+      }
+    },
+    {
+      "cluster_id": 1,
+      "name": "ELITE_FWD_GOALS_TOTALDISTANCE_POPULAR",
+      "n": 8,
+      "mean_pts": 16.375,
+      "exemplars": [
+        {
+          "known_name": "Lionel Messi",
+          "total_pts": 33
+        },
+        {
+          "known_name": "Erling Haaland",
+          "total_pts": 30
+        },
+        {
+          "known_name": "Kylian Mbapp\u00e9",
+          "total_pts": 27
+        }
+      ],
+      "centroid": {
+        "price": 9.4125,
+        "percent_selected": 38.287499999999994
+      }
+    },
+    {
+      "cluster_id": 2,
+      "name": "BUDGET_DEF_CS_TOTALDISTANCE_DIFF",
+      "n": 611,
+      "mean_pts": 1.6873977086743044,
+      "exemplars": [
+        {
+          "known_name": "Alexander Freeman",
+          "total_pts": 23.0
+        },
+        {
+          "known_name": "Ramin Rezaeian",
+          "total_pts": 22.0
+        },
+        {
+          "known_name": "Facundo Medina",
+          "total_pts": 20.0
+        }
+      ],
+      "centroid": {
+        "price": 3.860229132569559,
+        "percent_selected": 0.24729950900163666
+      }
+    },
+    {
+      "cluster_id": 3,
+      "name": "MID_TIER_MID_CS_TOTALDISTANCE_DIFF",
+      "n": 71,
+      "mean_pts": 6.873239436619718,
+      "exemplars": [
+        {
+          "known_name": "Deniz Undav",
+          "total_pts": 28.0
+        },
+        {
+          "known_name": "Jonathan David",
+          "total_pts": 26.0
+        },
+        {
+          "known_name": "Alexander Isak",
+          "total_pts": 23.0
+        }
+      ],
+      "centroid": {
+        "price": 7.322535211267605,
+        "percent_selected": 2.369014084507042
+      }
+    },
+    {
+      "cluster_id": 4,
+      "name": "MID_TIER_MID_GOALS_TOTALDISTANCE_POPULAR",
+      "n": 13,
+      "mean_pts": 9.153846153846153,
+      "exemplars": [
+        {
+          "known_name": "Vin\u00edcius J\u00fanior",
+          "total_pts": 20
+        },
+        {
+          "known_name": "Mikel Oyarzabal",
+          "total_pts": 17
+        },
+        {
+          "known_name": "Ousmane Demb\u00e9l\u00e9",
+          "total_pts": 15
+        }
+      ],
+      "centroid": {
+        "price": 8.476923076923077,
+        "percent_selected": 14.36923076923077
+      }
+    },
+    {
+      "cluster_id": 5,
+      "name": "BUDGET_MID_CS_TOTALDISTANCE_DIFF",
+      "n": 284,
+      "mean_pts": 3.4225352112676055,
+      "exemplars": [
+        {
+          "known_name": "Maxi Ara\u00fajo",
+          "total_pts": 23.0
+        },
+        {
+          "known_name": "Daichi Kamada",
+          "total_pts": 22.0
+        },
+        {
+          "known_name": "Cyle Larin",
+          "total_pts": 21.0
+        }
+      ],
+      "centroid": {
+        "price": 5.914084507042254,
+        "percent_selected": 0.28838028169014085
+      }
+    },
+    {
+      "cluster_id": 6,
+      "name": "BUDGET_DEF_CS_TOTALDISTANCE_POPULAR",
+      "n": 49,
+      "mean_pts": 8.653061224489797,
+      "exemplars": [
+        {
+          "known_name": "Felix Nmecha",
+          "total_pts": 23.0
+        },
+        {
+          "known_name": "Aymeric Laporte",
+          "total_pts": 21.0
+        },
+        {
+          "known_name": "Sergi\u00f1o Dest",
+          "total_pts": 21.0
+        }
+      ],
+      "centroid": {
+        "price": 4.987755102040817,
+        "percent_selected": 6.089795918367346
+      }
+    },
+    {
+      "cluster_id": 7,
+      "name": "BUDGET_DEF_CS_TOTALDISTANCE_POPULAR",
+      "n": 9,
+      "mean_pts": 9.88888888888889,
+      "exemplars": [
+        {
+          "known_name": "Marc Cucurella",
+          "total_pts": 17
+        },
+        {
+          "known_name": "Emiliano Mart\u00ednez",
+          "total_pts": 14
+        },
+        {
+          "known_name": "Joshua Kimmich",
+          "total_pts": 10
+        }
+      ],
+      "centroid": {
+        "price": 5.377777777777777,
+        "percent_selected": 21.255555555555556
+      }
+    }
+  ]
+}

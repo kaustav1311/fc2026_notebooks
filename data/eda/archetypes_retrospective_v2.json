@@ -1,0 +1,320 @@
+{
+  "mode": "retrospective",
+  "k": 6,
+  "silhouette": 0.21732731193446558,
+  "feature_cols": [
+    "price",
+    "percent_selected",
+    "AttemptAtGoal_p90",
+    "AttemptAtGoalOnTarget_p90",
+    "XG_p90",
+    "Assists_p90",
+    "Crosses_p90",
+    "CrossesCompleted_p90",
+    "PassesCompleted_p90",
+    "DefensivePressuresApplied_p90",
+    "ForcedTurnovers_p90",
+    "Corners_p90",
+    "TotalDistance_p90",
+    "GoalkeeperSaves_p90",
+    "wc_rating",
+    "avg_attacking_score",
+    "avg_defensive_score",
+    "avg_creativity_score",
+    "pts_from_goals_pct",
+    "pts_from_assists_pct",
+    "pts_from_cs_pct",
+    "pts_from_sb_pct",
+    "pts_from_tackles_pct",
+    "pts_from_cc_pct",
+    "pts_from_sot_pct",
+    "pts_from_saves_pct"
+  ],
+  "archetypes": [
+    {
+      "cluster_id": 0,
+      "name": "BUDGET_MID_ASSISTS_TOTALDISTANCE_DIFF",
+      "n": 56,
+      "mean_pts": 10.357142857142858,
+      "exemplars": [
+        {
+          "known_name": "Alexander Isak",
+          "total_pts": 23
+        },
+        {
+          "known_name": "Felix Nmecha",
+          "total_pts": 23
+        },
+        {
+          "known_name": "Ramin Rezaeian",
+          "total_pts": 22
+        }
+      ],
+      "centroid": {
+        "price": 5.914285714285714,
+        "percent_selected": 2.5285714285714285,
+        "AttemptAtGoal_p90": 1.2194308997688559,
+        "AttemptAtGoalOnTarget_p90": 0.36734799881881447,
+        "XG_p90": 0.09062850842346483,
+        "Assists_p90": 0.6250283819736369,
+        "Crosses_p90": 2.0266898413115455,
+        "CrossesCompleted_p90": 0.666092372154109,
+        "PassesCompleted_p90": 32.88353156159265,
+        "DefensivePressuresApplied_p90": 26.91531977979062,
+        "ForcedTurnovers_p90": 3.7448840833613812,
+        "Corners_p90": 0.5764147640356923,
+        "TotalDistance_p90": 9660.306440981205,
+        "GoalkeeperSaves_p90": 0.0,
+        "wc_rating": 7.394363636363637,
+        "avg_attacking_score": 5.210353795971189,
+        "avg_defensive_score": 5.501744065965925,
+        "avg_creativity_score": 6.929188272782734,
+        "pts_from_goals_pct": 0.05223207704134285,
+        "pts_from_assists_pct": 0.5333630521586625,
+        "pts_from_cs_pct": 0.06209913989519252,
+        "pts_from_sb_pct": 0.2998208693365703,
+        "pts_from_tackles_pct": 0.0433156595971722,
+        "pts_from_cc_pct": 0.006245225362872421,
+        "pts_from_sot_pct": 0.0029239766081871343,
+        "pts_from_saves_pct": 0.0
+      }
+    },
+    {
+      "cluster_id": 1,
+      "name": "BUDGET_DEF_CS_TOTALDISTANCE_DIFF",
+      "n": 92,
+      "mean_pts": 10.358695652173912,
+      "exemplars": [
+        {
+          "known_name": "Alexander Freeman",
+          "total_pts": 23
+        },
+        {
+          "known_name": "Aymeric Laporte",
+          "total_pts": 21
+        },
+        {
+          "known_name": "Sergi\u00f1o Dest",
+          "total_pts": 21
+        }
+      ],
+      "centroid": {
+        "price": 4.316304347826088,
+        "percent_selected": 2.7717391304347827,
+        "AttemptAtGoal_p90": 0.4333182490447275,
+        "AttemptAtGoalOnTarget_p90": 0.1279856662222834,
+        "XG_p90": 0.035125768733457276,
+        "Assists_p90": 0.0242669990862284,
+        "Crosses_p90": 1.0454175980250253,
+        "CrossesCompleted_p90": 0.21029001810044246,
+        "PassesCompleted_p90": 40.6432583062722,
+        "DefensivePressuresApplied_p90": 12.470569753019126,
+        "ForcedTurnovers_p90": 2.6965586088757356,
+        "Corners_p90": 0.0674606784455319,
+        "TotalDistance_p90": 8779.63794700682,
+        "GoalkeeperSaves_p90": 0.09628665940307429,
+        "wc_rating": 7.106373626373627,
+        "avg_attacking_score": 4.474778377308565,
+        "avg_defensive_score": 6.32047342412612,
+        "avg_creativity_score": 5.753024906270644,
+        "pts_from_goals_pct": 0.004004576659038902,
+        "pts_from_assists_pct": 0.026283431873013238,
+        "pts_from_cs_pct": 0.7301961622529665,
+        "pts_from_sb_pct": 0.23951582921498107,
+        "pts_from_tackles_pct": 0.0,
+        "pts_from_cc_pct": 0.0,
+        "pts_from_sot_pct": 0.0,
+        "pts_from_saves_pct": 0.0
+      }
+    },
+    {
+      "cluster_id": 2,
+      "name": "MID_TIER_FWD_GOALS_TOTALDISTANCE_DIFF",
+      "n": 15,
+      "mean_pts": 19.2,
+      "exemplars": [
+        {
+          "known_name": "Lionel Messi",
+          "total_pts": 33
+        },
+        {
+          "known_name": "Erling Haaland",
+          "total_pts": 30
+        },
+        {
+          "known_name": "Deniz Undav",
+          "total_pts": 28
+        }
+      ],
+      "centroid": {
+        "price": 7.799999999999999,
+        "percent_selected": 13.086666666666666,
+        "AttemptAtGoal_p90": 5.545907254623391,
+        "AttemptAtGoalOnTarget_p90": 4.1162826014077885,
+        "XG_p90": 1.2398875269618441,
+        "Assists_p90": 0.3122329063965423,
+        "Crosses_p90": 1.0008887519065042,
+        "CrossesCompleted_p90": 0.22313656775761595,
+        "PassesCompleted_p90": 14.533179322989046,
+        "DefensivePressuresApplied_p90": 25.120008256298465,
+        "ForcedTurnovers_p90": 4.079367799448174,
+        "Corners_p90": 0.20019503081830242,
+        "TotalDistance_p90": 9242.609019591842,
+        "GoalkeeperSaves_p90": 0.0,
+        "wc_rating": 8.292307692307693,
+        "avg_attacking_score": 6.978154714290913,
+        "avg_defensive_score": 5.193151272260225,
+        "avg_creativity_score": 6.155235767364502,
+        "pts_from_goals_pct": 0.7019208873980017,
+        "pts_from_assists_pct": 0.10009859421624127,
+        "pts_from_cs_pct": 0.014814814814814814,
+        "pts_from_sb_pct": 0.10193793134969606,
+        "pts_from_tackles_pct": 0.0,
+        "pts_from_cc_pct": 0.0,
+        "pts_from_sot_pct": 0.08122777222124607,
+        "pts_from_saves_pct": 0.0
+      }
+    },
+    {
+      "cluster_id": 3,
+      "name": "BUDGET_MID_GOALS_TOTALDISTANCE_DIFF",
+      "n": 68,
+      "mean_pts": 12.294117647058824,
+      "exemplars": [
+        {
+          "known_name": "Daichi Kamada",
+          "total_pts": 22
+        },
+        {
+          "known_name": "Ismael Saibari",
+          "total_pts": 21
+        },
+        {
+          "known_name": "Crysencio Summerville",
+          "total_pts": 21
+        }
+      ],
+      "centroid": {
+        "price": 5.654411764705881,
+        "percent_selected": 2.5352941176470587,
+        "AttemptAtGoal_p90": 2.1613046435218664,
+        "AttemptAtGoalOnTarget_p90": 1.287204055223118,
+        "XG_p90": 0.3103455293481039,
+        "Assists_p90": 0.06701524563742488,
+        "Crosses_p90": 1.36792738480864,
+        "CrossesCompleted_p90": 0.17028082425134736,
+        "PassesCompleted_p90": 24.425964658013548,
+        "DefensivePressuresApplied_p90": 29.934600943725,
+        "ForcedTurnovers_p90": 3.8578442098253967,
+        "Corners_p90": 0.23045226569954988,
+        "TotalDistance_p90": 9680.504937347345,
+        "GoalkeeperSaves_p90": 0.0,
+        "wc_rating": 7.4187692307692314,
+        "avg_attacking_score": 6.799276843437782,
+        "avg_defensive_score": 5.345354885321397,
+        "avg_creativity_score": 6.242250204086304,
+        "pts_from_goals_pct": 0.6814490474468162,
+        "pts_from_assists_pct": 0.041616938917635515,
+        "pts_from_cs_pct": 0.0393085732510473,
+        "pts_from_sb_pct": 0.20250998394551478,
+        "pts_from_tackles_pct": 0.012208216619981324,
+        "pts_from_cc_pct": 0.0012254901960784314,
+        "pts_from_sot_pct": 0.021681749622926096,
+        "pts_from_saves_pct": 0.0
+      }
+    },
+    {
+      "cluster_id": 4,
+      "name": "MID_TIER_MID_ASSISTS_TOTALDISTANCE_DIFF",
+      "n": 6,
+      "mean_pts": 12.666666666666666,
+      "exemplars": [
+        {
+          "known_name": "Maxi Ara\u00fajo",
+          "total_pts": 23
+        },
+        {
+          "known_name": "Rub\u00e9n Vargas",
+          "total_pts": 18
+        },
+        {
+          "known_name": "Junya Ito",
+          "total_pts": 12
+        }
+      ],
+      "centroid": {
+        "price": 6.783333333333332,
+        "percent_selected": 13.216666666666667,
+        "AttemptAtGoal_p90": 2.8931071481993027,
+        "AttemptAtGoalOnTarget_p90": 1.4923743968246665,
+        "XG_p90": 0.4282236336179574,
+        "Assists_p90": 0.7361177799793004,
+        "Crosses_p90": 11.076973790165773,
+        "CrossesCompleted_p90": 4.04812852693668,
+        "PassesCompleted_p90": 39.1533201237171,
+        "DefensivePressuresApplied_p90": 18.706815092279815,
+        "ForcedTurnovers_p90": 4.5557707978389335,
+        "Corners_p90": 5.945412596626853,
+        "TotalDistance_p90": 9338.583448596939,
+        "GoalkeeperSaves_p90": 0.0,
+        "wc_rating": 7.788333333333333,
+        "avg_attacking_score": 6.260001500447591,
+        "avg_defensive_score": 5.664484103520711,
+        "avg_creativity_score": 7.487840215365092,
+        "pts_from_goals_pct": 0.3969298245614035,
+        "pts_from_assists_pct": 0.4263157894736842,
+        "pts_from_cs_pct": 0.08611111111111112,
+        "pts_from_sb_pct": 0.09064327485380118,
+        "pts_from_tackles_pct": 0.0,
+        "pts_from_cc_pct": 0.0,
+        "pts_from_sot_pct": 0.0,
+        "pts_from_saves_pct": 0.0
+      }
+    },
+    {
+      "cluster_id": 5,
+      "name": "BUDGET_GK_CS_TOTALDISTANCE_DIFF",
+      "n": 12,
+      "mean_pts": 10.916666666666666,
+      "exemplars": [
+        {
+          "known_name": "Alireza Beiranvand",
+          "total_pts": 14
+        },
+        {
+          "known_name": "Patrick Beach",
+          "total_pts": 12
+        },
+        {
+          "known_name": "Vozinha",
+          "total_pts": 12
+        }
+      ],
+      "centroid": {
+        "price": 4.15,
+        "percent_selected": 3.1666666666666665,
+        "AttemptAtGoal_p90": 0.0,
+        "AttemptAtGoalOnTarget_p90": 0.0,
+        "XG_p90": 0.0,
+        "Assists_p90": 0.0,
+        "Crosses_p90": 0.0,
+        "CrossesCompleted_p90": 0.0,
+        "PassesCompleted_p90": 17.51259430084605,
+        "DefensivePressuresApplied_p90": 0.0,
+        "ForcedTurnovers_p90": 0.03448320254237756,
+        "Corners_p90": 0.0,
+        "TotalDistance_p90": 4300.020110016391,
+        "GoalkeeperSaves_p90": 4.1595877015142815,
+        "wc_rating": 7.271666666666666,
+        "pts_from_goals_pct": 0.0,
+        "pts_from_assists_pct": 0.0,
+        "pts_from_cs_pct": 0.5634816572316572,
+        "pts_from_sb_pct": 0.1738053613053613,
+        "pts_from_tackles_pct": 0.0,
+        "pts_from_cc_pct": 0.0,
+        "pts_from_sot_pct": 0.0,
+        "pts_from_saves_pct": 0.26271298146298144
+      }
+    }
+  ]
+}

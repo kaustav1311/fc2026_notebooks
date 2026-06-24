@@ -197,7 +197,7 @@ jobs:
             ARGS="$ARGS --bucket ${{ inputs.bucket }}"
           elif [ ! -d data/raw/footymetrics ] || [ -z "$(ls -A data/raw/footymetrics 2>/dev/null)" ] \
                || [ ! -d data/raw/fotmob ] || [ -z "$(ls -A data/raw/fotmob 2>/dev/null)" ]; then
-            echo "::notice::Cold cache detected (data/raw/footymetrics or data/raw/fotmob empty). Bootstrapping with --bucket all so the daily notebooks (04, 08) populate the raw cache before the hourly ones read it. This run will take 30-50 min; subsequent cached runs go back to 2-4 min hourly."
+            echo "::notice::Cold cache detected (data/raw/footymetrics or data/raw/fotmob empty). Bootstrapping with --bucket all so 06/04 (daily) plus 08 (hourly, FotMob playerData) populate the raw cache. This run will take 30-50 min; subsequent cached runs go back to 2-4 min hourly."
             ARGS="$ARGS --bucket all"
           fi
           if [ "${{ inputs.force_refresh }}" = "true" ]; then

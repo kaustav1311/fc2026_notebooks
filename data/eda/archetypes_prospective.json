@@ -1,0 +1,164 @@
+[
+  {
+    "cluster_id": 0,
+    "name": "EMERGING_VETERAN_Midfielder",
+    "n_members": 348,
+    "mean_value_m_eur": 6.0,
+    "mean_club_apps": 416.7,
+    "exemplars": [
+      {
+        "player": "Joshua KIMMICH",
+        "nation": "GER",
+        "position": "Defender",
+        "value_m_eur": 42.9
+      },
+      {
+        "player": "Youri TIELEMANS",
+        "nation": "BEL",
+        "position": "Midfielder",
+        "value_m_eur": 39.1
+      },
+      {
+        "player": "Mikel OYARZABAL",
+        "nation": "ESP",
+        "position": "Forward",
+        "value_m_eur": 34.4
+      }
+    ]
+  },
+  {
+    "cluster_id": 1,
+    "name": "EMERGING_MID_CAREER_Defender",
+    "n_members": 582,
+    "mean_value_m_eur": 4.6,
+    "mean_club_apps": 179.4,
+    "exemplars": [
+      {
+        "player": "Robin ROEFS",
+        "nation": "NED",
+        "position": "Goalkeeper",
+        "value_m_eur": 24.9
+      },
+      {
+        "player": "Zion Suzuki",
+        "nation": "JPN",
+        "position": "Goalkeeper",
+        "value_m_eur": 24.1
+      },
+      {
+        "player": "Carney CHUKWUEMEKA",
+        "nation": "AUT",
+        "position": "Midfielder",
+        "value_m_eur": 23.9
+      }
+    ]
+  },
+  {
+    "cluster_id": 2,
+    "name": "MEGASTAR_VETERAN_Forward",
+    "n_members": 50,
+    "mean_value_m_eur": 93.7,
+    "mean_club_apps": 314.6,
+    "exemplars": [
+      {
+        "player": "Lamine YAMAL",
+        "nation": "ESP",
+        "position": "Forward",
+        "value_m_eur": 191.2
+      },
+      {
+        "player": "Michael OLISE",
+        "nation": "FRA",
+        "position": "Forward",
+        "value_m_eur": 170.6
+      },
+      {
+        "player": "Erling HAALAND",
+        "nation": "NOR",
+        "position": "Forward",
+        "value_m_eur": 141.8
+      }
+    ]
+  },
+  {
+    "cluster_id": 3,
+    "name": "EMERGING_VETERAN_Forward",
+    "n_members": 28,
+    "mean_value_m_eur": 11.5,
+    "mean_club_apps": 621.6,
+    "exemplars": [
+      {
+        "player": "Harry KANE",
+        "nation": "ENG",
+        "position": "Forward",
+        "value_m_eur": 106.7
+      },
+      {
+        "player": "BRUNO FERNANDES",
+        "nation": "POR",
+        "position": "Midfielder",
+        "value_m_eur": 41.4
+      },
+      {
+        "player": "MOHAMED SALAH",
+        "nation": "EGY",
+        "position": "Forward",
+        "value_m_eur": 39.0
+      }
+    ]
+  },
+  {
+    "cluster_id": 4,
+    "name": "ESTABLISHED_VETERAN_Forward",
+    "n_members": 203,
+    "mean_value_m_eur": 37.0,
+    "mean_club_apps": 246.7,
+    "exemplars": [
+      {
+        "player": "Micky VAN DE VEN",
+        "nation": "NED",
+        "position": "Defender",
+        "value_m_eur": 73.5
+      },
+      {
+        "player": "Nick WOLTEMADE",
+        "nation": "GER",
+        "position": "Forward",
+        "value_m_eur": 72.3
+      },
+      {
+        "player": "Marc GUEHI",
+        "nation": "ENG",
+        "position": "Defender",
+        "value_m_eur": 70.1
+      }
+    ]
+  },
+  {
+    "cluster_id": 5,
+    "name": "EMERGING_YOUNG_Defender",
+    "n_members": 35,
+    "mean_value_m_eur": 0.4,
+    "mean_club_apps": 76.1,
+    "exemplars": [
+      {
+        "player": "Ermin MAHMIC",
+        "nation": "BIH",
+        "position": "Midfielder",
+        "value_m_eur": 1.2
+      },
+      {
+        "player": "Mouhib CHAMAKH",
+        "nation": "TUN",
+        "position": "Goalkeeper",
+        "value_m_eur": 0.6
+      },
+      {
+        "player": "JASSEM GABER",
+        "nation": "QAT",
+        "position": "Defender",
+        "value_m_eur": 0.5
+      }
+    ]
+  }
+]

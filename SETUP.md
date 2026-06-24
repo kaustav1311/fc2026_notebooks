@@ -100,7 +100,7 @@ The cron runs at the top of every hour. Two options:
 
 | Trigger | Runs |
 |---|---|
-| Hourly cron (`0 * * * *`) | Every hour, always. Inside the tournament window (2026-06-11 → 2026-07-20), refresh.py does the hourly bucket. On the first tick at-or-after 07:00 UTC each tournament day, it ALSO runs the daily bucket (player enrichment, ref sweeps). Outside the window, refresh.py exits after ~5 sec with no work. |
+| Hourly cron (`0 * * * *`) | Every hour, always. Inside the tournament window (2026-06-11 → 2026-07-20), refresh.py does the hourly bucket. On the first tick at-or-after 07:00 UTC each tournament day, it ALSO runs the daily bucket (FIFA squad roster + referee panel sweeps). Outside the window, refresh.py exits after ~5 sec with no work. |
 | `workflow_dispatch` (manual) | On demand. Use to force a daily/all/frozen rebuild, or to run with `force_refresh=true` if you suspect stale data. |
 
 The per-table refresh logic lives in `refresh.py` and `lib/events.py` —

@@ -60,19 +60,16 @@ Notebooks: `01_nations.ipynb`, `02_stadiums.ipynb`, `06_players.ipynb` (official
 
 | Table | Source | Why daily |
 |---|---|---|
-| `wc26_player_enrichment` | FotMob team page + TM team page + per-player FotMob playerData | market values move in € weekly, club moves are rarer |
-| `wc26_player_market_value_history` | FotMob playerData `marketValues.values[]` | new period-start entries arrive every quarter |
-| `wc26_player_career_senior`, `_national` | FotMob playerData `careerHistory.*.seasonEntries[]` | season-level updates roll in nightly |
-| `wc26_player_career_national_summary`, `wc26_player_career_club_summary` | derived from the long career tables (youth/senior split + clubs array + current) | rebuild whenever the long tables refresh |
-| `wc26_player_market_value_summary` | derived from `wc26_player_market_value_history` (per-source latest+peak + consolidated) | rebuilds whenever the long table refreshes |
 | `referee_master`, `referee_profile` (`career` window) | FootyMetrics `/world-cup-2026/referees` + per-ref pages | panel changes are infrequent (suspensions) |
 | `referee_profile` (`last_10`, `last_25`) | FootyMetrics profile `recentMatches` block | refreshed as part of the per-ref page pull |
 
-Notebooks: `06`, `08`, `04`. Wire as a single daily script:
+Notebooks: `06`, `04`. Wire as a single daily script:
 
 ```bash
-python -m notebook_runner 06 08 04 --force-refresh
+python -m notebook_runner 06 04 --force-refresh
 ```
+
+**Note (2026-06-24):** `08_player_enrichment` used to live here but was promoted to the hourly bucket. With event-gating in place a typical 08 tick is ~30 HTTP fetches, not 1248 — and keeping it daily meant a stale `wc26_player_match_stats_wide` (the daily bundle fires BEFORE the hourly notebooks at the 07:00 UTC slot) gave nb_08 an empty `EVENT_PIDS`, so the per-player FotMob playerData never refreshed and `wc26_player_career_national_summary` (caps/goals/assists) stayed stale for a full cycle. Hourly placement after nb_07 fixes the ordering.
 
 ### 🟥 Every 3 hours — during the tournament window
 
@@ -85,7 +82,12 @@ python -m notebook_runner 06 08 04 --force-refresh
 | `fantasy_rounds`, `fantasy_round_matches` | `play.fifa.com/json/fantasy/rounds.json` | round status, fixture period/minutes/scores |
 | `fantasy_players` | `play.fifa.com/json/fantasy/players.json` | **`percentSelected` moves continuously** (this is the Scouting Premium input from `D-1-Doc §2`) — price + form + total points also tick |
 | `fantasy_player_round_stats` | `play.fifa.com/json/fantasy/player_stats/{id}.json` | finalised at round end |
-| `wc26_player_fotmob_wc`, `wc26_player_recent_matches_fotmob` | FotMob playerData (already cached daily by 08; re-parse here) | new last-match rating lands ~15 min post-match |
+| `wc26_player_enrichment` | FotMob team page + TM team page + per-player FotMob playerData | per-player FotMob blob carries `careerHistory['national team']`; refetched on the same tick the player's match flips to finished |
+| `wc26_player_market_value_history` | FotMob playerData `marketValues.values[]` + TM `marketValueDevelopment/graph/{id}` | re-emitted from cached + event-fresh playerData each tick |
+| `wc26_player_career_senior`, `wc26_player_career_national` | FotMob playerData `careerHistory.*.seasonEntries[]` | caps/goals/assists tick up as matches finish — needs hourly refresh during the tournament |
+| `wc26_player_career_national_summary`, `wc26_player_career_club_summary` | derived from the long career tables (youth/senior split + clubs array + current) | rebuilds whenever the long tables refresh |
+| `wc26_player_market_value_summary` | derived from `wc26_player_market_value_history` (per-source latest+peak + consolidated) | rebuilds whenever the long table refreshes |
+| `wc26_player_fotmob_wc`, `wc26_player_recent_matches_fotmob` | FotMob playerData (already cached hourly by 08; re-parse here) | new last-match rating lands ~15 min post-match |
 | `fantasy_squads` | `play.fifa.com/json/fantasy/squads.json` | `isEliminated` flips after knockouts |
 | `wc26_match_weather` | Open-Meteo `/v1/forecast` + `/v1/archive` | forecast updates hourly upstream; archive supersedes forecast once the match completes; knockout matches roll into coverage as they enter the 16-day forecast horizon |
 | `wc26_polymarket_match_volume` | derived from `wc26_match_polymarket_markets` | rebuilds with parent table inside notebook 13 |
@@ -100,7 +102,7 @@ python -m notebook_runner 06 08 04 --force-refresh
 | `wc26_stg_player_powerrank` | derived from `wc26_player_match_powerrank` (groupby on (fifa_player_id, fifa_team_id), mean of scores, no joins) | rebuilds with parent |
 | `ref_id_bridge` | derived inside `04_referees` (numeric `fifa_referee_id` → slug `referee_id` by surname+iso3 + override CSV) | rebuilds with `04` daily; cheap |
 
-Notebooks: `03`, `05`, `07`, `09`, `10`, `11`, `12`, **`14`** (staging core), **`15`** (staging matches), **`16`** (staging players).
+Notebooks: `03`, `05`, `07`, **`08`** (player enrichment — promoted 2026-06-24), `09`, `10`, `11`, `12`, `13`, **`14`** (staging core), **`15`** (staging matches), **`16`** (staging players). Order matters: `08` must follow `07` so `wc26_player_match_stats_wide` is fresh when nb_08 derives `EVENT_PIDS`.
 
 ### ⏱ Event-triggered — fire on a specific moment
 
@@ -123,10 +125,14 @@ from datetime import datetime, timezone
 
 NOTEBOOK_BUCKETS = {
     "frozen": [],  # never auto-fired
-    "daily":  ["06_players", "08_player_enrichment", "04_referees"],
+    "daily":  ["06_players", "04_referees"],
     "hourly": [
         "03_matches", "05_referee_assignments",
-        "07_player_match_stats", "09_player_season_stats",
+        "07_player_match_stats",
+        # 08 must follow 07 — its event-gate reads the just-written
+        # wc26_player_match_stats_wide to derive EVENT_PIDS.
+        "08_player_enrichment",
+        "09_player_season_stats",
         "10_fifa_fantasy", "11_fotmob_wc_and_form",
         "12_match_weather", "13_polymarket",
         # Staging notebooks always run LAST so they consume fresh inputs on the

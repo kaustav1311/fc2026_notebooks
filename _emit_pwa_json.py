@@ -57,6 +57,18 @@ EMIT: list[str] = [
     # loadPowerrankIndex for FantasyTab rank chips + PlayerDetailSheet
     # WC totals section rank chips.
     "wc26_stg_player_powerrank",
+    # Round 3: fantasy round + fixture metadata. Feeds the "K's 2 cents"
+    # sub-tab in FantasyTab — the round picker reads fantasy_rounds for
+    # labels + status + start/end dates; fantasy_round_matches gives the
+    # per-round fixture list. Both are nb_10 outputs that already refresh
+    # on the hourly tick.
+    "fantasy_rounds",
+    "fantasy_round_matches",
+    # Round 4: K's 2 cents recommendations (notebook 17). Per-(player, fixture)
+    # rows with Floor/Ceiling/Differential in 3 normalization modes + archetype
+    # enrichment + reason chips. Built fresh each hourly tick from the locked
+    # factor catalog + EDA v2 calibration.
+    "wc26_fantasy_recommendations",
 ]
 
 # Slim emit: only a subset of columns for very wide tables. wc26_stg_players is

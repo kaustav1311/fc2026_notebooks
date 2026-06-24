@@ -1,0 +1,330 @@
+[
+  {
+    "cluster_id": 0,
+    "name": "POPULAR_MID_CHANCE_CREATOR",
+    "n_members": 25,
+    "position_mix": {
+      "MID": 13,
+      "DEF": 6,
+      "FWD": 6
+    },
+    "centroid": {
+      "recent5_fotmob_rating": 7.4988,
+      "percent_selected": 6.4239999999999995,
+      "form": 5.348000000000001,
+      "fifa_wc_AttemptAtGoalOnTarget": 1.72,
+      "fotmob_wc_chances_created": 5.96,
+      "fotmob_wc_big_chances_created": 1.76,
+      "fotmob_wc_duels_won_pct": 54.11600000000001,
+      "avg_attacking_score": 6.020289573669434,
+      "avg_defensive_score": 5.208283681869506,
+      "avg_creativity_score": 7.4971201133728025
+    },
+    "exemplars": [
+      {
+        "player": "Isak",
+        "nation": "Sweden",
+        "round": 1,
+        "points": 16
+      },
+      {
+        "player": "Vargas",
+        "nation": "Switzerland",
+        "round": 2,
+        "points": 15
+      },
+      {
+        "player": "Gy\u00f6keres",
+        "nation": "Sweden",
+        "round": 1,
+        "points": 14
+      }
+    ],
+    "mean_points": 9.4
+  },
+  {
+    "cluster_id": 1,
+    "name": "DIFFERENTIAL_DEF_SET_PIECE_DEF",
+    "n_members": 83,
+    "position_mix": {
+      "DEF": 66,
+      "MID": 13,
+      "FWD": 4
+    },
+    "centroid": {
+      "recent5_fotmob_rating": 7.103052208835341,
+      "percent_selected": 2.5084337349397594,
+      "form": 3.521686746987952,
+      "fifa_wc_AttemptAtGoalOnTarget": 0.3855421686746988,
+      "fotmob_wc_chances_created": 0.5783132530120482,
+      "fotmob_wc_big_chances_created": 0.060240963855421686,
+      "fotmob_wc_duels_won_pct": 68.02168674698795,
+      "avg_attacking_score": 4.875613916351135,
+      "avg_defensive_score": 6.4390654032488905,
+      "avg_creativity_score": 5.648253716618182
+    },
+    "exemplars": [
+      {
+        "player": "Santos Carneiro da Cunha",
+        "nation": "Brazil",
+        "round": 2,
+        "points": 15
+      },
+      {
+        "player": "Singo",
+        "nation": "C\u00f4te d'Ivoire",
+        "round": 1,
+        "points": 12
+      },
+      {
+        "player": "Demb\u00e9l\u00e9",
+        "nation": "France",
+        "round": 2,
+        "points": 12
+      }
+    ],
+    "mean_points": 8.831325301204819
+  },
+  {
+    "cluster_id": 2,
+    "name": "DIFFERENTIAL_GK_SHOT_STOPPER",
+    "n_members": 14,
+    "position_mix": {
+      "GK": 13,
+      "MID": 1
+    },
+    "centroid": {
+      "recent5_fotmob_rating": 6.937738095238095,
+      "percent_selected": 3.25,
+      "form": 3.75,
+      "fifa_wc_AttemptAtGoalOnTarget": 0.07142857142857142,
+      "fotmob_wc_chances_created": 0.0,
+      "fotmob_wc_big_chances_created": 0.0,
+      "fotmob_wc_duels_won_pct": 97.62142857142858,
+      "avg_attacking_score": null,
+      "avg_defensive_score": null,
+      "avg_creativity_score": null
+    },
+    "exemplars": [
+      {
+        "player": "\u00c9vora Dias",
+        "nation": "Cabo Verde",
+        "round": 1,
+        "points": 11
+      },
+      {
+        "player": "Beiranvand",
+        "nation": "IR Iran",
+        "round": 2,
+        "points": 11
+      },
+      {
+        "player": "Cr\u00e9peau",
+        "nation": "Canada",
+        "round": 2,
+        "points": 9
+      }
+    ],
+    "mean_points": 8.642857142857142
+  },
+  {
+    "cluster_id": 3,
+    "name": "POPULAR_FWD_BALANCED",
+    "n_members": 8,
+    "position_mix": {
+      "FWD": 7,
+      "MID": 1
+    },
+    "centroid": {
+      "recent5_fotmob_rating": 8.116249999999999,
+      "percent_selected": 37.5125,
+      "form": 8.375,
+      "fifa_wc_AttemptAtGoalOnTarget": 3.375,
+      "fotmob_wc_chances_created": 1.25,
+      "fotmob_wc_big_chances_created": 0.0,
+      "fotmob_wc_duels_won_pct": 46.875,
+      "avg_attacking_score": 8.298392504453659,
+      "avg_defensive_score": 4.919406145811081,
+      "avg_creativity_score": 6.671372324228287
+    },
+    "exemplars": [
+      {
+        "player": "Messi",
+        "nation": "Argentina",
+        "round": 1,
+        "points": 19
+      },
+      {
+        "player": "Haaland",
+        "nation": "Norway",
+        "round": 1,
+        "points": 17
+      },
+      {
+        "player": "Messi",
+        "nation": "Argentina",
+        "round": 2,
+        "points": 14
+      }
+    ],
+    "mean_points": 13.75
+  },
+  {
+    "cluster_id": 4,
+    "name": "DIFFERENTIAL_MID_BALANCED",
+    "n_members": 95,
+    "position_mix": {
+      "MID": 45,
+      "DEF": 31,
+      "FWD": 19
+    },
+    "centroid": {
+      "recent5_fotmob_rating": 6.981245614035087,
+      "percent_selected": 1.5757894736842104,
+      "form": 3.154736842105263,
+      "fifa_wc_AttemptAtGoalOnTarget": 0.5052631578947369,
+      "fotmob_wc_chances_created": 1.4673913043478262,
+      "fotmob_wc_big_chances_created": 0.25,
+      "fotmob_wc_duels_won_pct": 43.32608695652174,
+      "avg_attacking_score": 5.434625158811871,
+      "avg_defensive_score": 5.330539055874473,
+      "avg_creativity_score": 6.457296030144942
+    },
+    "exemplars": [
+      {
+        "player": "Sarr",
+        "nation": "Senegal",
+        "round": 2,
+        "points": 15
+      },
+      {
+        "player": "Saliba",
+        "nation": "Canada",
+        "round": 2,
+        "points": 13
+      },
+      {
+        "player": "Metcalfe",
+        "nation": "Australia",
+        "round": 1,
+        "points": 11
+      }
+    ],
+    "mean_points": 8.421052631578947
+  },
+  {
+    "cluster_id": 5,
+    "name": "POPULAR_GK_SHOT_STOPPER",
+    "n_members": 11,
+    "position_mix": {
+      "GK": 9,
+      "FWD": 1,
+      "MID": 1
+    },
+    "centroid": {
+      "recent5_fotmob_rating": 7.114242424242425,
+      "percent_selected": 7.636363636363637,
+      "form": 3.8636363636363638,
+      "fifa_wc_AttemptAtGoalOnTarget": 0.18181818181818182,
+      "fotmob_wc_chances_created": 0.0,
+      "fotmob_wc_big_chances_created": 0.0,
+      "fotmob_wc_duels_won_pct": 0.0,
+      "avg_attacking_score": null,
+      "avg_defensive_score": null,
+      "avg_creativity_score": null
+    },
+    "exemplars": [
+      {
+        "player": "Room",
+        "nation": "Cura\u00e7ao",
+        "round": 2,
+        "points": 14
+      },
+      {
+        "player": "Beach",
+        "nation": "Australia",
+        "round": 1,
+        "points": 11
+      },
+      {
+        "player": "Gill",
+        "nation": "Paraguay",
+        "round": 2,
+        "points": 10
+      }
+    ],
+    "mean_points": 8.727272727272727
+  },
+  {
+    "cluster_id": 6,
+    "name": "POPULAR_MID_BALANCED",
+    "n_members": 44,
+    "position_mix": {
+      "MID": 19,
+      "FWD": 15,
+      "DEF": 10
+    },
+    "centroid": {
+      "recent5_fotmob_rating": 7.344583333333335,
+      "percent_selected": 5.340909090909091,
+      "form": 6.3113636363636365,
+      "fifa_wc_AttemptAtGoalOnTarget": 2.3863636363636362,
+      "fotmob_wc_chances_created": 1.9090909090909092,
+      "fotmob_wc_big_chances_created": 0.5681818181818182,
+      "fotmob_wc_duels_won_pct": 44.334090909090904,
+      "avg_attacking_score": 6.769080525094813,
+      "avg_defensive_score": 5.747343637726524,
+      "avg_creativity_score": 6.557465683330189
+    },
+    "exemplars": [
+      {
+        "player": "David",
+        "nation": "Canada",
+        "round": 2,
+        "points": 24
+      },
+      {
+        "player": "Gakpo",
+        "nation": "Netherlands",
+        "round": 2,
+        "points": 19
+      },
+      {
+        "player": "Ueda",
+        "nation": "Japan",
+        "round": 2,
+        "points": 18
+      }
+    ],
+    "mean_points": 12.068181818181818
+  },
+  {
+    "cluster_id": 7,
+    "name": "DIFFERENTIAL_MID_BALANCED_c7",
+    "n_members": 1,
+    "position_mix": {
+      "MID": 1
+    },
+    "centroid": {
+      "recent5_fotmob_rating": null,
+      "percent_selected": 0.1,
+      "form": 3.0,
+      "fifa_wc_AttemptAtGoalOnTarget": 1.0,
+      "fotmob_wc_chances_created": 0.0,
+      "fotmob_wc_big_chances_created": 0.0,
+      "fotmob_wc_duels_won_pct": 0.0,
+      "avg_attacking_score": null,
+      "avg_defensive_score": null,
+      "avg_creativity_score": null
+    },
+    "exemplars": [
+      {
+        "player": "Mahmic",
+        "nation": "Bosnia and Herzegovina",
+        "round": 2,
+        "points": 9
+      }
+    ],
+    "mean_points": 9.0
+  }
+]

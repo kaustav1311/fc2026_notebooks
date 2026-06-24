@@ -40,23 +40,45 @@ NOTEBOOK_BUCKETS: dict[str, list[str]] = {
     "frozen": ["01_nations", "02_stadiums"],
 
     # 🟨 daily — once per day during the tournament.
-    "daily":  ["06_players", "08_player_enrichment", "04_referees"],
+    "daily":  ["06_players", "04_referees"],
 
     # 🟥 every 3 hours — the dynamic data.
     "hourly": [
         "03_matches",
         "05_referee_assignments",
         "07_player_match_stats",
+        # 08 must run AFTER 07 so wc26_player_match_stats_wide is fresh:
+        # nb_08's event-gate reads match_wide to derive EVENT_PIDS (the
+        # ~22-30 players who appeared in newly-finished matches). With a
+        # stale match_wide the gate returns an empty set and the per-player
+        # FotMob playerData refetch never fires — leaving caps/goals/assists
+        # in wc26_player_career_national_summary stale for a full cycle.
+        # Promoted from daily 2026-06-24 once event-gating made the per-tick
+        # cost ~30 HTTP fetches instead of 1248.
+        "08_player_enrichment",
         "09_player_season_stats",
         "10_fifa_fantasy",
         "11_fotmob_wc_and_form",
         "12_match_weather",
         "13_polymarket",
         # Staging tables (no network calls — pure pandas over the parquets above).
-        # Listed last so every upstream input is guaranteed fresh on the same tick.
+        # Listed before the dependents-on-staging so every upstream input is
+        # guaranteed fresh on the same tick.
         "14_staging_core",
         "15_staging_matches",
         "16_staging_players",
+        # 18 — 365scores trends per-fixture snapshot. Depends on
+        # wc26_stg_matches + wc26_stg_nations (both built by 14/15), so runs
+        # after staging. Appends to a snapshot timeline parquet so a tick's
+        # trends are preserved alongside prior snapshots (lets us study how
+        # a trend's `percentage` evolved through the days before kickoff).
+        "18_scores365_trends",
+        # 17 — fantasy recommender. Runs LAST in the hourly bundle: depends on
+        # every staging table above + 18's trend snapshot. Emits
+        # wc26_fantasy_recommendations.{parquet,json} which the PWA's "K's 2
+        # cents" sub-tab renders. Notebook 17 is a .py script (matches
+        # 17a_eda_factor_signal.py's pattern), not a .ipynb.
+        "17_fantasy_recommender",
     ],
 }
 
@@ -104,18 +126,23 @@ def pick_bundle(bucket: str | None, now: datetime | None = None) -> list[str]:
 
 
 def resolve_notebook(needle: str) -> Path:
-    """Accept '03' or '03_matches' or '03_matches.ipynb'."""
-    candidates = sorted(ROOT.glob(f"{needle.removesuffix('.ipynb')}*.ipynb"))
-    if not candidates:
-        # try prefix match against bucket lists
-        for bucket in NOTEBOOK_BUCKETS.values():
-            for stem in bucket:
-                if stem.startswith(needle.removesuffix('.ipynb')):
-                    p = ROOT / f"{stem}.ipynb"
+    """Accept '03' or '03_matches' or '03_matches.ipynb' or '17_fantasy_recommender.py'."""
+    stem = needle.removesuffix('.ipynb').removesuffix('.py')
+    # Prefer .ipynb, fall back to .py
+    candidates = sorted(ROOT.glob(f"{stem}*.ipynb"))
+    if candidates:
+        return candidates[0]
+    candidates = sorted(ROOT.glob(f"{stem}*.py"))
+    if candidates:
+        return candidates[0]
+    for bucket in NOTEBOOK_BUCKETS.values():
+        for s in bucket:
+            if s.startswith(stem):
+                for ext in (".ipynb", ".py"):
+                    p = ROOT / f"{s}{ext}"
                     if p.exists():
                         return p
-        raise FileNotFoundError(f"no notebook matched {needle!r}")
-    return candidates[0]
+    raise FileNotFoundError(f"no notebook matched {needle!r}")
 
 
 def run_notebook(
@@ -153,6 +180,13 @@ def run_notebook(
         os.environ["FORCE_ALL_EVENTS"] = "1"
     else:
         os.environ.pop("FORCE_ALL_EVENTS", None)
+
+    if nb_path.suffix == ".py":
+        # Plain Python script — run via subprocess. Cleaner than nbclient for
+        # non-interactive notebooks (e.g. 17_fantasy_recommender.py).
+        import subprocess
+        subprocess.run([sys.executable, str(nb_path)], check=True, cwd=str(ROOT))
+        return
 
     nb = nbformat.read(str(nb_path), as_version=4)
     # 45 min per cell — covers nb_08's TM-history sweep on a cold cache when

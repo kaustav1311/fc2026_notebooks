@@ -24,15 +24,15 @@ Legend
 | `wc26_player_match_stats` | 86,202 | 07 | FDH-stats (53-key allowlist) | 🟥 3 h + event | match → `finished` |
 | `wc26_player_match_stats_wide` | 1,644 | 07 | FDH-stats wide pivot (14 ids + 53 stats) | 🟥 3 h + event | match → `finished` |
 | `wc26_player_match_powerrank` | 546 | 07 | FDH-power | 🟥 3 h + event | match → `finished` |
-| `wc26_player_enrichment` | 1,248 | 08 | FotMob-team + FotMob-player + TM-team | 🟨 daily | market value drift |
-| `wc26_player_market_value_history` | 64,180 | 08 | FotMob-player `marketValues.values[]` | 🟨 daily | new period-start entry |
-| `wc26_player_career_senior` | 21,280 | 08 | FotMob-player `careerHistory.senior` | 🟨 daily | season turn |
-| `wc26_player_career_national` | 11,569 | 08 | FotMob-player `careerHistory['national team']` | 🟨 daily | season turn |
-| `wc26_player_career_national_summary` | 1,224 | 08 | derived from `wc26_player_career_national` (youth/senior split per player) | 🟨 daily | rebuilds with parent |
-| `wc26_player_career_club_summary` | 1,224 | 08 | derived from `wc26_player_career_senior` (youth/senior split + all_clubs + current) | 🟨 daily | rebuilds with parent |
-| `wc26_player_market_value_summary` | 1,200 | 08 | derived from `wc26_player_market_value_history` (per-source latest+peak + consolidated) | 🟨 daily | rebuilds with parent |
-| `wc26_player_fotmob_wc` | 682 | 11 | parsed from `08` raw cache + per-match aggregation from FotMob `/matchDetails`. Strictly WC26 (seasonName=2026, tournamentId=24254). Carries 12 deep WC stats summed across each player's WC26 matches. | 🟥 3 h | re-parse after `08` daily |
-| `wc26_player_recent_matches_fotmob` | 24,193 | 11 | parsed from `08` raw cache, capped at 20 newest matches per player | 🟥 3 h | match → `finished` (lag ~15 min — bounded by the daily `08` cache refresh that re-fetches FotMob playerData) |
+| `wc26_player_enrichment` | 1,248 | 08 | FotMob-team + FotMob-player + TM-team | 🟥 3 h + event | event-A (player in newly-finished match) — promoted from daily 2026-06-24 |
+| `wc26_player_market_value_history` | 64,180 | 08 | FotMob-player `marketValues.values[]` + TM `marketValueDevelopment` | 🟥 3 h | rebuilds whenever 08 ticks |
+| `wc26_player_career_senior` | 21,280 | 08 | FotMob-player `careerHistory.senior` | 🟥 3 h + event | caps/goals/assists tick on every finished match |
+| `wc26_player_career_national` | 11,569 | 08 | FotMob-player `careerHistory['national team']` | 🟥 3 h + event | caps/goals/assists tick on every finished match |
+| `wc26_player_career_national_summary` | 1,224 | 08 | derived from `wc26_player_career_national` (youth/senior split per player) | 🟥 3 h | rebuilds with parent |
+| `wc26_player_career_club_summary` | 1,224 | 08 | derived from `wc26_player_career_senior` (youth/senior split + all_clubs + current) | 🟥 3 h | rebuilds with parent |
+| `wc26_player_market_value_summary` | 1,200 | 08 | derived from `wc26_player_market_value_history` (per-source latest+peak + consolidated) | 🟥 3 h | rebuilds with parent |
+| `wc26_player_fotmob_wc` | 682 | 11 | parsed from `08` raw cache + per-match aggregation from FotMob `/matchDetails`. Strictly WC26 (seasonName=2026, tournamentId=24254). Carries 12 deep WC stats summed across each player's WC26 matches. | 🟥 3 h | re-parse after `08` (same tick) |
+| `wc26_player_recent_matches_fotmob` | 24,193 | 11 | parsed from `08` raw cache, capped at 20 newest matches per player | 🟥 3 h | match → `finished` (lag ~15 min — bounded by the same-tick `08` playerData refetch) |
 | `referee_master` | 50 | 04 | FootyMetrics WC26 panel | 🟨 daily | panel change (suspension) |
 | `referee_profile` | 150 | 04 | FootyMetrics career + `recentMatches` | 🟨 daily | re-parse after refresh |
 | `referee_assignments` | 58 | 05 | FIFA-cal `Officials` + FootyMetrics fixtures | 🟥 3 h + event | new appointment publishes |
