@@ -746,6 +746,49 @@ DEFAULT_BRACKET_WEIGHTS = {
     "w_b4_fantasy": 0.30,
 }
 
+# ─── Live %selected refresh ─────────────────────────────────────────────────
+
+
+def refresh_live_percent_selected(force: bool = True) -> dict[int, float]:
+    """Pull the LIVE FIFA Fantasy players endpoint and return a map of
+    fantasy_player_id → percent_selected. Same source the PWA edge-proxies.
+
+    Falls back to {} if the fetch fails — the caller can then keep the
+    snapshot value from fantasy_players.parquet.
+
+    `force=True` (default) bypasses any cached copy so the model sees the
+    same %selected the PWA's live overlay sees at this tick.
+    """
+    try:
+        from lib import io as wh_io  # local import — avoids notebook-time hard-dep
+        data = wh_io.cache_raw(
+            "https://play.fifa.com/json/fantasy/players.json",
+            source="fifa_fantasy",
+            name="players_live_for_recommender",
+            as_json=True,
+            force_refresh=force,
+            max_age_days=0,
+        )
+    except Exception as exc:  # network down, FIFA paywall, etc.
+        print(f"[live_pct] fetch failed, falling back to snapshot: {exc}")
+        return {}
+
+    rows = data.get("value", {}).get("playerList", []) if isinstance(data, dict) else []
+    if not rows:
+        # Some payload shapes vary — try the bare top-level list
+        rows = data if isinstance(data, list) else []
+    out: dict[int, float] = {}
+    for r in rows:
+        pid = r.get("id") if isinstance(r, dict) else None
+        pct = r.get("percentSelected") if isinstance(r, dict) else None
+        if pid is not None and pct is not None:
+            try:
+                out[int(pid)] = float(pct)
+            except (TypeError, ValueError):
+                continue
+    return out
+
+
 # ─── MODEL REGISTRY ──────────────────────────────────────────────────────────
 # Three independent scoring philosophies. Each consumes the same per-(player,
 # fixture) bracket dataframe from score_players_brackets, then re-weights the
@@ -886,16 +929,21 @@ def _apply_model_boosts(brackets_df: pd.DataFrame, raw_df: pd.DataFrame,
 
 
 def score_for_model(round_id: int, fixture_profiles: pd.DataFrame,
-                     model_id: str) -> pd.DataFrame:
+                     model_id: str,
+                     live_pct_selected: dict[int, float] | None = None) -> pd.DataFrame:
     """Score players under a specific model. Returns the bracket dataframe with
-    ev_model + post-boost breakdowns added."""
+    ev_model + post-boost breakdowns added.
+
+    Pass live_pct_selected to override the snapshot ownership at scoring time.
+    """
     if model_id not in MODEL_REGISTRY:
         raise ValueError(f"unknown model_id {model_id!r}; known={list(MODEL_REGISTRY)}")
     cfg = MODEL_REGISTRY[model_id]
     # Run bracket scorer with this model's bracket weights (so the existing
     # ev_bracket column also reflects the model — for back-compat).
     brackets = score_players_brackets(round_id, fixture_profiles,
-                                       bracket_weights=cfg["weights"])
+                                       bracket_weights=cfg["weights"],
+                                       live_pct_selected=live_pct_selected)
 
     # Need raw player attributes for post-boost components — load once.
     raw = pd.read_parquet(PROC / "wc26_stg_players_view.parquet")
@@ -1034,8 +1082,14 @@ def _per90(stat: pd.Series, minutes: pd.Series, prior_per90: float = None) -> pd
 
 
 def score_players_brackets(round_id: int, fixture_profiles: pd.DataFrame,
-                            bracket_weights: dict = None) -> pd.DataFrame:
+                            bracket_weights: dict = None,
+                            live_pct_selected: dict[int, float] | None = None) -> pd.DataFrame:
     """Score players using the 5-bracket Player Strength Score model.
+
+    Args:
+      live_pct_selected: optional override map {fantasy_player_id → percent_selected}
+        from the live FIFA endpoint. If provided, replaces the snapshot value
+        so the differential / SB scoring sees fresh ownership.
 
     Returns one row per (player, fixture) with:
       b1_overall, b2_wc_perf, b3_external, b4_fantasy  → 0-1 sub-scores
@@ -1053,6 +1107,14 @@ def score_players_brackets(round_id: int, fixture_profiles: pd.DataFrame,
          "last_round_points", "first_name", "last_name", "known_name",
          "is_active", "round_points_json"]
     ]
+    # Live %selected override — replaces snapshot value with the freshest
+    # ownership from the FIFA Fantasy endpoint. Falls back to snapshot for
+    # players the live payload doesn't include.
+    if live_pct_selected:
+        fp["percent_selected"] = fp.apply(
+            lambda r: live_pct_selected.get(int(r["fantasy_player_id"]), r["percent_selected"]),
+            axis=1,
+        )
     fp["one_to_watch"] = False
     fp["injury"] = None
     sq = pd.read_parquet(PROC / "fantasy_squads.parquet")[
