@@ -407,8 +407,20 @@ def assemble_fixture_profile(round_id: int) -> pd.DataFrame:
     )
 
     # Weather cluster + modifiers
-    rm["weather_cluster"] = rm.apply(assign_weather_cluster, axis=1)
-    wm = rm["weather_cluster"].map(WEATHER_MODIFIER).apply(pd.Series)
+    rm["weather_cluster"] = rm.apply(assign_weather_cluster, axis=1) if len(rm) else 0
+    if len(rm):
+        wm_series = rm["weather_cluster"].map(WEATHER_MODIFIER)
+        # apply(pd.Series) on a Series-of-dicts returns a DataFrame; on an
+        # empty/all-None series it can return a Series, which breaks the
+        # subsequent .rename(columns=). Guard by building the DataFrame
+        # explicitly from the dict map.
+        wm = pd.DataFrame(
+            list(wm_series.fillna({}).values),
+            index=rm.index,
+            columns=["goals_index", "cs_index", "draw_boost"],
+        )
+    else:
+        wm = pd.DataFrame(columns=["goals_index", "cs_index", "draw_boost"])
     rm = pd.concat([rm, wm.rename(columns={"goals_index": "weather_goals_mult",
                                             "cs_index": "weather_cs_mult",
                                             "draw_boost": "weather_draw_boost"})], axis=1)
@@ -854,6 +866,37 @@ MODEL_REGISTRY = {
         ],
         "fixture_amplifier": 1.0,
         "sb_quota": 3,               # ownership-blind → low SB quota
+    },
+    "m4_sb_hunter": {
+        "name": "SB Hunter",
+        "blurb": "K's rule. 12 sub-5% picks for the +2 Scouting Bonus event + 3 anchors: 2 sure-shot FWDs (xG × goals_index) + 1 most-influential MID (creativity + B2). Highest variance, highest rank-leap upside.",
+        # Same scoring engine as Banker (we want the *strongest* differential
+        # candidates by EV — not the most differential by ownership only).
+        "weights": {"w_b1_overall": 0.20, "w_b2_wc_perf": 0.30,
+                    "w_b3_external": 0.20, "w_b4_fantasy": 0.30},
+        "post_boosts": [
+            # Surface the anchors via dedicated sub-scores; the custom assembler
+            # reads `boost_sure_shot_fwd` and `boost_influential_mid` directly.
+            {"name": "sure_shot_fwd", "weight": 0.0,
+             "components": [
+                 ("fifa_wc_XG", "per90_rank_pct"),
+                 ("fifa_wc_AttemptAtGoalOnTarget", "per90_rank_pct"),
+                 ("recent5_goals", "rank_pct"),
+                 ("recent10_goals", "rank_pct"),
+             ]},
+            {"name": "influential_mid", "weight": 0.0,
+             "components": [
+                 ("fotmob_wc_chances_created", "per90_rank_pct"),
+                 ("fotmob_wc_big_chances_created", "per90_rank_pct"),
+                 ("fifa_wc_CompletedBallProgressions", "per90_rank_pct"),
+                 ("avg_creativity_score", "rank_pct"),
+                 ("fifa_wc_NumberOfInvolvements", "per90_rank_pct"),
+             ]},
+        ],
+        "fixture_amplifier": 1.0,
+        "sb_quota": 12,
+        # Custom assembler tag — orchestrator routes m4 to assemble_sb_hunter_squad
+        "assembler": "sb_hunter",
     },
 }
 
@@ -1919,6 +1962,220 @@ def assemble_strategy_squad(scored: pd.DataFrame, strat: dict,
         "bench": [slim(p) for p in bench],
         "twelfth_man": slim(twelfth_pick) if twelfth_pick else None,
         "non_budget_mode": non_budget,
+    }
+
+
+# ─── M4 SB Hunter — custom squad assembly ───────────────────────────────────
+
+
+def assemble_sb_hunter_squad(scored: pd.DataFrame, strat: dict,
+                              budget_m: float = 100.0,
+                              max_per_nation: int = 3,
+                              non_budget: bool = False) -> dict:
+    """K's SB Hunter rule:
+      - 2 anchors: top 2 FWDs by `boost_sure_shot_fwd` (any ownership)
+      - 1 anchor:  top 1 MID by `boost_influential_mid` (any ownership)
+      - 12 differentials: top by ev_model from <5% ownership pool, filling
+        the remaining quota (2 GK / 5 DEF / 4 MID / 1 FWD)
+
+    Same constraints as the standard assembler: position quota, nation cap,
+    optional budget. If the SB-band pool runs out for some position, falls
+    back to non-SB to complete the squad and reports sb_gap.
+    """
+    df = scored.copy()
+    # Sort key for non-anchor picks
+    df["ev_strategy"] = df.get("ev_model", df.get("ev_bracket", pd.Series(0, index=df.index)))
+
+    quota = POSITION_QUOTA.copy()
+    nation_count: dict[str, int] = {}
+    spent = 0.0
+    picks = []
+    picked_ids: set[int] = set()
+    anchor_meta: dict[int, str] = {}  # pid → "sure_shot_fwd" | "influential_mid"
+
+    def can_pick(row, override_pos_check: bool = False) -> tuple[bool, str]:
+        pos = row["position"]
+        if not override_pos_check and quota.get(pos, 0) <= 0:
+            return False, "pos_quota_full"
+        nat = row["nation_id"]
+        if nation_count.get(nat, 0) >= max_per_nation:
+            return False, "nation_cap"
+        price = float(row.get("price") or 0)
+        if not non_budget and (spent + price) > budget_m:
+            return False, "budget"
+        return True, "ok"
+
+    def add(row, anchor: str | None = None):
+        nonlocal spent
+        pid = int(row["fantasy_player_id"])
+        picks.append(row.to_dict())
+        picked_ids.add(pid)
+        quota[row["position"]] -= 1
+        nation_count[row["nation_id"]] = nation_count.get(row["nation_id"], 0) + 1
+        spent += float(row.get("price") or 0)
+        if anchor:
+            anchor_meta[pid] = anchor
+
+    # Step 1: 2 sure-shot FWDs
+    if "boost_sure_shot_fwd" in df.columns:
+        fwd_pool = df[(df["position"] == "FWD") & (df["is_active"].fillna(True) == True)].copy()
+        fwd_pool = fwd_pool.sort_values("boost_sure_shot_fwd", ascending=False)
+        picked_fwd = 0
+        for _, row in fwd_pool.iterrows():
+            if picked_fwd >= 2:
+                break
+            if int(row["fantasy_player_id"]) in picked_ids:
+                continue
+            ok, _ = can_pick(row)
+            if not ok:
+                continue
+            add(row, anchor="sure_shot_fwd")
+            picked_fwd += 1
+
+    # Step 2: 1 most-influential MID
+    if "boost_influential_mid" in df.columns:
+        mid_pool = df[(df["position"] == "MID") & (df["is_active"].fillna(True) == True)].copy()
+        mid_pool = mid_pool.sort_values("boost_influential_mid", ascending=False)
+        for _, row in mid_pool.iterrows():
+            if int(row["fantasy_player_id"]) in picked_ids:
+                continue
+            ok, _ = can_pick(row)
+            if not ok:
+                continue
+            add(row, anchor="influential_mid")
+            break
+
+    # Step 3: 12 SB-band picks by ev_strategy from remaining slots.
+    # Iterate descending by ev; SB-band only.
+    diff_pool = df[(df["percent_selected"].fillna(50) < 5)
+                   & (df["is_active"].fillna(True) == True)].sort_values(
+        "ev_strategy", ascending=False)
+    diff_count = 0
+    target_diff = strat.get("sb_quota", 12)
+    for _, row in diff_pool.iterrows():
+        if sum(quota.values()) == 0:
+            break
+        if diff_count >= target_diff:
+            break
+        pid = int(row["fantasy_player_id"])
+        if pid in picked_ids:
+            continue
+        ok, _ = can_pick(row)
+        if not ok:
+            continue
+        add(row)
+        diff_count += 1
+
+    sb_gap = max(0, target_diff - diff_count)
+
+    # Step 4: any leftover slots (e.g. SB-band exhausted) → fill from full pool
+    if sum(quota.values()) > 0:
+        full = df[df["is_active"].fillna(True) == True].sort_values(
+            "ev_strategy", ascending=False)
+        for _, row in full.iterrows():
+            if sum(quota.values()) == 0:
+                break
+            pid = int(row["fantasy_player_id"])
+            if pid in picked_ids:
+                continue
+            ok, _ = can_pick(row)
+            if not ok:
+                continue
+            add(row)
+
+    # ── Pick formation + captain (shared logic w/ assemble_strategy_squad) ──
+    pos_order = {"GK": 0, "DEF": 1, "MID": 2, "FWD": 3}
+    picks.sort(key=lambda p: (pos_order[p["position"]], -p["ev_strategy"]))
+
+    starting = []
+    bench = []
+    gks = [p for p in picks if p["position"] == "GK"]
+    defs = [p for p in picks if p["position"] == "DEF"]
+    mids = [p for p in picks if p["position"] == "MID"]
+    fwds = [p for p in picks if p["position"] == "FWD"]
+
+    starting.append(gks[0]); bench.append(gks[1] if len(gks) > 1 else None)
+    starting.extend(defs[:3])
+    starting.extend(mids[:2])
+    starting.extend(fwds[:1])
+    leftover = (defs[3:] + mids[2:] + fwds[1:])
+    leftover.sort(key=lambda p: -p["ev_strategy"])
+    formation_max = {"DEF": 2, "MID": 3, "FWD": 2}
+    formation_used = {"DEF": 0, "MID": 0, "FWD": 0}
+    for p in leftover:
+        if len(starting) >= 11: break
+        if formation_used[p["position"]] < formation_max[p["position"]]:
+            starting.append(p)
+            formation_used[p["position"]] += 1
+    for p in leftover:
+        if p in starting: continue
+        bench.append(p)
+    bench = [b for b in bench if b is not None]
+
+    starting_sorted = sorted(starting, key=lambda p: -p["ev_strategy"])
+    captain_id = int(starting_sorted[0]["fantasy_player_id"])
+    vice_id = int(starting_sorted[1]["fantasy_player_id"])
+
+    twelfth = df[~df["fantasy_player_id"].isin(picked_ids)] \
+        .sort_values("ev_strategy", ascending=False).head(1)
+    twelfth_pick = twelfth.iloc[0].to_dict() if not twelfth.empty else None
+
+    n_def = sum(1 for p in starting if p["position"] == "DEF")
+    n_mid = sum(1 for p in starting if p["position"] == "MID")
+    n_fwd = sum(1 for p in starting if p["position"] == "FWD")
+    formation = f"{n_def}-{n_mid}-{n_fwd}"
+
+    xi_ev_sum = sum(p["ev_strategy"] for p in starting)
+    cap_bonus = max(p["ev_strategy"] for p in starting)
+    projected_pts = xi_ev_sum + cap_bonus
+
+    def slim(p):
+        pid = int(p["fantasy_player_id"])
+        return {
+            "fantasy_player_id": pid,
+            "known_name": p.get("known_name"),
+            "nation_id": p.get("nation_id"),
+            "position": p["position"],
+            "price": float(p.get("price") or 0),
+            "percent_selected": float(p.get("percent_selected") or 0),
+            "ev_strategy": float(p["ev_strategy"]),
+            "is_differential": (p.get("percent_selected") or 50) < 5,
+            "captain": pid == captain_id,
+            "vice_captain": pid == vice_id,
+            "reason_chips": list(p.get("reason_chips") or []),
+            "archetype": p.get("archetype_retrospective") or p.get("archetype_prospective"),
+            "anchor_role": anchor_meta.get(pid),  # "sure_shot_fwd" / "influential_mid" / None
+        }
+
+    sb_band_count = sum(1 for p in picks if (p.get("percent_selected") or 50) < 5)
+
+    return {
+        "strategy_id": strat["id"],
+        "model_id": strat["id"],
+        "name": strat["name"],
+        "blurb": strat["blurb"],
+        "weights": {
+            "alpha_floor": strat.get("alpha_floor", 0),
+            "beta_ceiling": strat.get("beta_ceiling", 0),
+            "gamma_differential": strat.get("gamma_differential", 0),
+        },
+        "sb_quota": strat["sb_quota"],
+        "sb_band_count": sb_band_count,
+        "sb_gap": sb_gap,
+        "formation": formation,
+        "budget_spent_m": round(spent, 2),
+        "budget_max_m": budget_m,
+        "captain_id": captain_id,
+        "vice_captain_id": vice_id,
+        "projected_pts_with_captain": round(projected_pts, 2),
+        "starting_xi": [slim(p) for p in starting],
+        "bench": [slim(p) for p in bench],
+        "twelfth_man": slim(twelfth_pick) if twelfth_pick else None,
+        "non_budget_mode": non_budget,
+        "anchors": [
+            {"role": "sure_shot_fwd", "count": sum(1 for r in anchor_meta.values() if r == "sure_shot_fwd")},
+            {"role": "influential_mid", "count": sum(1 for r in anchor_meta.values() if r == "influential_mid")},
+        ],
     }
 
 

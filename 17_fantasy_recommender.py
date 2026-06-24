@@ -36,7 +36,9 @@ from lib.recommender import (
     apply_filters,
     tag_anti_picks,
     assemble_strategy_squad,
+    assemble_sb_hunter_squad,
     build_position_suggestor,
+    refresh_live_percent_selected,
     MODEL_REGISTRY,
 )
 
@@ -47,16 +49,33 @@ EDA_DIR = ROOT / "data" / "eda"
 
 
 def pick_target_round() -> int:
+    """Pick the round currently in [start, end] — even if the parquet's
+    status hasn't flipped to 'playing' yet (FIFA's status field lags). Then
+    fall back to next scheduled, then latest known. Also REQUIRES the round
+    to have fixtures: scheduled-but-no-fixtures rounds (R32 TBD until the
+    group stage finishes) get skipped to the prior playable round.
+    """
     fr = pd.read_parquet(PROC / "fantasy_rounds.parquet")
+    frm = pd.read_parquet(PROC / "fantasy_round_matches.parquet")
+    rounds_with_matches = set(frm["round_id"].unique().tolist())
     now = pd.Timestamp.now(tz="UTC")
     fr["start"] = pd.to_datetime(fr["start_date"], utc=True, errors="coerce")
     fr["end"] = pd.to_datetime(fr["end_date"], utc=True, errors="coerce")
-    live = fr[(fr["status"] == "playing") & (fr["end"] > now)]
-    if not live.empty:
-        return int(live.iloc[0]["round_id"])
-    sched = fr[fr["start"] > now].sort_values("start")
+
+    # Currently active by date window
+    active = fr[(fr["start"] <= now) & (fr["end"] > now)]
+    active = active[active["round_id"].isin(rounds_with_matches)]
+    if not active.empty:
+        return int(active.iloc[0]["round_id"])
+    # Otherwise next scheduled WITH fixtures
+    sched = fr[(fr["start"] > now)].sort_values("start")
+    sched = sched[sched["round_id"].isin(rounds_with_matches)]
     if not sched.empty:
         return int(sched.iloc[0]["round_id"])
+    # Otherwise the most recently completed
+    done = fr[fr["status"] == "complete"].sort_values("round_id")
+    if not done.empty:
+        return int(done.iloc[-1]["round_id"])
     return int(fr["round_id"].max())
 
 
@@ -164,16 +183,22 @@ def main():
     print(f"[17]   retro k={retro.get('k')} sil={retro.get('silhouette',0):.3f}")
     print(f"[17]   prospective k={prospective.get('k')} sil={prospective.get('silhouette',0):.3f}")
 
+    # 1b. Refresh live %selected — bypasses the warehouse snapshot so the
+    # scoring's SB / differential math sees the same ownership the PWA does.
+    print("[17] fetching live FIFA Fantasy %selected…")
+    live_pct = refresh_live_percent_selected(force=True)
+    print(f"[17]   live %selected map: {len(live_pct)} players")
+
     # 2. Fixture profiles
     print("[17] assembling fixture profiles…")
     fx = assemble_fixture_profile(target)
     print(f"[17]   {len(fx)} fixtures for round {target}")
 
     # 3. Score under each model
-    print("[17] scoring under 3 models (m1_banker, m2_form_hunter, m3_stat_max)…")
+    print(f"[17] scoring under {len(MODEL_REGISTRY)} models…")
     model_outputs: dict[str, pd.DataFrame] = {}
     for mid, cfg in MODEL_REGISTRY.items():
-        scored = score_for_model(target, fx, mid)
+        scored = score_for_model(target, fx, mid, live_pct_selected=live_pct)
         scored = attach_archetypes(scored, retro, prospective)
         scored = apply_filters(scored)
         scored = tag_anti_picks(scored)
@@ -275,16 +300,22 @@ def main():
     (PROC / "wc26_fantasy_position_suggestor.json").write_text(safe_sug)
     (PWA_JSON / "wc26_fantasy_position_suggestor.json").write_text(safe_sug)
 
-    # 8. Squads — ONE per model now (3 challenges). Each model's squad sorts
-    # by ev_model and respects its own sb_quota.
-    print("[17] assembling 3 challenge squads (one per model)…")
+    # 8. Squads — ONE per model. M4 uses the custom SB Hunter assembler;
+    # the rest use the generic assembler with ev_model sort + SB-quota cap.
+    print(f"[17] assembling {len(MODEL_REGISTRY)} challenge squads…")
     squads = []
     for mid, cfg in MODEL_REGISTRY.items():
         strat = model_to_strategy(mid, cfg)
         scored = model_outputs[mid]
-        sq = assemble_strategy_squad(scored, strat, budget_m=100.0, max_per_nation=3)
-        sq_unbud = assemble_strategy_squad(scored, strat, budget_m=100.0,
-                                            max_per_nation=3, non_budget=True)
+        assembler_kind = cfg.get("assembler", "default")
+        if assembler_kind == "sb_hunter":
+            sq = assemble_sb_hunter_squad(scored, strat, budget_m=100.0, max_per_nation=3)
+            sq_unbud = assemble_sb_hunter_squad(scored, strat, budget_m=100.0,
+                                                  max_per_nation=3, non_budget=True)
+        else:
+            sq = assemble_strategy_squad(scored, strat, budget_m=100.0, max_per_nation=3)
+            sq_unbud = assemble_strategy_squad(scored, strat, budget_m=100.0,
+                                                max_per_nation=3, non_budget=True)
         sq["unbudgeted_variant"] = sq_unbud
         sq["target_round_id"] = target
         sq["snapshot_ts"] = snapshot_ts
