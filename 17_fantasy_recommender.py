@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,6 +28,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
+import lib.recommender as rec_mod
 from lib.recommender import (
     assemble_fixture_profile,
     score_for_model,
@@ -46,6 +49,304 @@ PROC = ROOT / "data" / "processed"
 PWA_JSON = PROC / "json"
 PWA_JSON.mkdir(parents=True, exist_ok=True)
 EDA_DIR = ROOT / "data" / "eda"
+
+# ── Locked-snapshot directory ────────────────────────────────────────────────
+# When the target round becomes R, freeze every cumulative / per-round input
+# parquet at the post-R-1 state into `locked/post_round_{R-1:02d}/`. Re-runs
+# for the same target round reuse the frozen snapshot, making suggestions
+# deterministic across the round window and preventing R3 picks from drifting
+# once R3 matches start producing data.
+#
+# Live FIFA %selected is intentionally NOT locked — it ticks throughout the
+# round and the differential / SB-eligibility math benefits from fresh
+# ownership.
+LOCKED_ROOT = PROC / "locked"
+
+# Cumulative / aggregate parquets we REBUILD from per-match sources inside
+# the lock. Listed here for documentation; we don't copy them.
+LOCK_REBUILT_FILES = [
+    "wc26_stg_fantasy_player_totals.parquet",  # rebuilt from filtered fantasy_player_round_stats
+    "wc26_stg_player_powerrank.parquet",       # rebuilt from filtered wc26_player_match_powerrank
+    "wc26_stg_players_view.parquet",           # fifa_wc_* cols rebuilt from filtered wc26_player_match_stats_wide
+    "wc26_stg_players.parquet",                # same — wide source for the view
+]
+
+# Per-match / per-round source parquets we FILTER and copy into the lock.
+LOCK_FILTERED_PER_ROUND = "fantasy_player_round_stats.parquet"
+LOCK_FILTERED_PER_MATCH = [
+    "wc26_player_match_stats_wide.parquet",
+    "wc26_player_match_powerrank.parquet",
+]
+
+# Parquets that are NOT round-dependent (identity, schedule, markets, squad
+# rosters, fantasy_rounds for status) — copied as-is. `fantasy_rounds.parquet`
+# also lives at LIVE PROC for pick_target_round; the locked copy is a backup
+# for any downstream caller that uses the rebound PROC.
+LOCK_COPIED_AS_IS = [
+    "fantasy_round_matches.parquet",
+    "fantasy_players.parquet",
+    "fantasy_squads.parquet",
+    "wc26_stg_matches.parquet",
+    "wc26_match_polymarket_markets.parquet",
+    "wc26_match_weather.parquet",
+    "wc26_match_trends.parquet",
+    "fantasy_rounds.parquet",
+]
+
+
+# ── FIFA wide → fifa_wc_* aggregation spec (mirrors _build_nb_16.py Block B)
+_NB16_SUM_COLS = [
+    "Assists", "AttemptAtGoal", "AttemptAtGoalOnTarget",
+    "AttemptedBallProgressions", "AttemptedSwitchesOfPlay",
+    "CleanSheets", "CompletedBallProgressions", "CompletedSwitchesOfPlay", "Corners",
+    "Crosses", "CrossesCompleted", "DefensivePressuresApplied", "DistanceHighSpeedSprinting",
+    "DistanceWalking", "DistributionsCompletedUnderPressure", "DistributionsUnderPressure",
+    "ForcedTurnovers", "FoulsAgainst", "FoulsFor", "FreeKicks", "GoalkeeperSaves",
+    "Goals", "GoalsConceded", "GoalsOutsideThePenaltyArea", "LinebreaksAttempted",
+    "LinebreaksAttemptedCompleted", "LinebreaksCompletedUnderPressure", "NumberOfInvolvements",
+    "NumberOfPossessionSequences", "NumberOfShotEndingSequences", "OffersToReceiveTotal",
+    "Offsides", "OwnGoals", "Passes", "PassesCompleted", "Penalties", "PenaltiesScored",
+    "ReceivedOffersToReceive", "ReceptionsBetweenMidfieldAndDefensiveLine", "ReceptionsInBehind",
+    "ReceptionsUnderNoPressure", "ReceptionsUnderPressure", "RedCards", "SpeedRuns", "Sprints",
+    "SubstitutionsIn", "SubstitutionsOut", "TakeOnsCompleted", "TimePlayed", "TotalDistance",
+    "YellowCards",
+]
+_NB16_AVG_COLS = ["AvgSpeed", "XG"]
+_NB16_MAX_COLS = ["TopSpeed"]
+
+
+def _match_ids_through_round(lock_round: int) -> tuple[set, set]:
+    """Return (allowed_match_numbers, allowed_fifa_match_ids) for matches in
+    fantasy rounds <= lock_round. Joins fantasy_round_matches → fantasy_squads
+    → stg_matches via the home/away nation_id pair.
+    """
+    rm = pd.read_parquet(PROC / "fantasy_round_matches.parquet")
+    sq = pd.read_parquet(PROC / "fantasy_squads.parquet")[["fantasy_squad_id", "abbr"]]
+    sq_h = sq.rename(columns={"fantasy_squad_id": "home_squad_id", "abbr": "home_nation_id"})
+    sq_a = sq.rename(columns={"fantasy_squad_id": "away_squad_id", "abbr": "away_nation_id"})
+    rm2 = rm.merge(sq_h, on="home_squad_id", how="left").merge(sq_a, on="away_squad_id", how="left")
+    matches = pd.read_parquet(PROC / "wc26_stg_matches.parquet")[
+        ["match_number", "fifa_match_id", "home_nation_id", "away_nation_id"]
+    ]
+    joined = rm2.merge(matches, on=["home_nation_id", "away_nation_id"], how="left")
+    keep = joined[joined["round_id"].astype(int) <= lock_round]
+    mn = set(int(v) for v in keep["match_number"].dropna().tolist())
+    fmi = set(str(v) for v in keep["fifa_match_id"].dropna().astype(str).tolist())
+    return mn, fmi
+
+
+def _rebuild_fantasy_totals(src_round_stats: Path, dst: Path) -> None:
+    """Mirror _build_nb_14.py § 4 against an already-filtered round-stats
+    parquet."""
+    prs = pd.read_parquet(src_round_stats)
+    out = (prs.groupby("fantasy_player_id", dropna=True)
+              .agg(
+                  appearances=("round_id", "count"),
+                  minutes_played=("minutes_played", "sum"),
+                  starting_xi=("starting_xi", "sum"),
+                  total_points=("points", "sum"),
+                  total_goals_scored=("goals_scored", "sum"),
+                  total_assists=("assists", "sum"),
+                  clean_sheets=("clean_sheet", "sum"),
+                  saves=("saves", "sum"),
+                  tackles=("tackles", "sum"),
+                  chances_created=("chances_created", "sum"),
+                  shots_on_target=("shots_on_target", "sum"),
+                  scouting_bonus=("scouting_bonus", "sum"),
+                  yellow_cards=("yellow_cards", "sum"),
+              )
+              .reset_index())
+    out.to_parquet(dst, index=False)
+    print(f"[17]   rebuilt {dst.name}: {len(out)} players")
+
+
+def _rebuild_player_powerrank(src_match_powerrank: Path, dst: Path) -> None:
+    """Mirror _build_nb_14.py § 5 against filtered per-match powerrank."""
+    pr = pd.read_parquet(src_match_powerrank)
+    out = (pr.groupby(["fifa_player_id", "fifa_team_id"], dropna=False)
+              .agg(
+                  avg_attacking_score=("attacking_score", "mean"),
+                  avg_defensive_score=("defensive_score", "mean"),
+                  avg_creativity_score=("creativity_score", "mean"),
+                  avg_defending_the_goal_score=("defending_the_goal_score", "mean"),
+                  n_matches_ranked=("fifa_match_id", "count"),
+                  player_kind=("player_kind", "first"),
+              )
+              .reset_index())
+    out.to_parquet(dst, index=False)
+    print(f"[17]   rebuilt {dst.name}: {len(out)} (player, team) pairs")
+
+
+def _rebuild_stg_players_view_fifa_wc(src_wide: Path, live_view_src: Path, dst: Path) -> None:
+    """Re-aggregate the fifa_wc_* / fotmob_wc_appearances columns from the
+    filtered wide table, then graft them onto the LIVE stg_players_view so
+    the bio / club career / market value / recent-form columns are preserved
+    unchanged. Only the WC-tournament aggregates get rewound to lock_round.
+    """
+    wide = pd.read_parquet(src_wide)
+    view = pd.read_parquet(live_view_src)
+
+    present = set(wide.columns)
+    sum_present = [c for c in _NB16_SUM_COLS if c in present]
+    avg_present = [c for c in _NB16_AVG_COLS if c in present]
+    max_present = [c for c in _NB16_MAX_COLS if c in present]
+
+    agg_spec = {**{c: "sum" for c in sum_present},
+                **{c: "mean" for c in avg_present},
+                **{c: "max" for c in max_present}}
+    if not agg_spec:
+        # No FIFA stats yet (very early in the tournament) — write the live
+        # view through and zero out fifa_wc_ totals.
+        view.to_parquet(dst, index=False)
+        print(f"[17]   rebuilt {dst.name}: wide table empty, passthrough view")
+        return
+
+    stats_agg = wide.groupby("fifa_player_id", dropna=True).agg(agg_spec).reset_index()
+    stats_agg = stats_agg.rename(columns={c: f"fifa_wc_{c}" for c in agg_spec.keys()})
+    # Player-specific appearance count — only matches where the player
+    # actually saw the pitch (TimePlayed > 0). FIFA's wide table includes
+    # squad-presence rows for benched-but-unused players, so a naive
+    # nunique(fifa_match_id) inflates "appearances" to the squad's match
+    # count. This was the root cause of the Neymar-shows-3-appearances bug
+    # reported on the PWA.
+    played_only = wide[wide["TimePlayed"].fillna(0) > 0] if "TimePlayed" in wide.columns else wide
+    n_matches = played_only.groupby("fifa_player_id").agg(
+        fifa_wc_n_matches=("fifa_match_id", "nunique"),
+    ).reset_index()
+    stats_agg = stats_agg.merge(n_matches, on="fifa_player_id", how="left")
+    # Players with squad rows but no minutes → 0 appearances, not NaN.
+    stats_agg["fifa_wc_n_matches"] = stats_agg["fifa_wc_n_matches"].fillna(0).astype("Int64")
+
+    fifa_wc_cols = [c for c in stats_agg.columns if c.startswith("fifa_wc_")]
+    # Drop fifa_wc_* + fotmob_wc_appearances (we'll override) from the live
+    # view to avoid duplicate columns from the merge.
+    drop_cols = [c for c in view.columns if c.startswith("fifa_wc_")]
+    drop_cols.append("fotmob_wc_appearances") if "fotmob_wc_appearances" in view.columns else None
+    view_trimmed = view.drop(columns=[c for c in drop_cols if c in view.columns])
+    out = view_trimmed.merge(stats_agg, on="fifa_player_id", how="left")
+    # Authoritative WC appearance count override (mirrors _build_nb_16.py).
+    if "fifa_wc_n_matches" in out.columns:
+        out["fotmob_wc_appearances"] = out["fifa_wc_n_matches"]
+
+    # Fill NaN for fifa_wc_ counters with 0 — a player with zero matches in
+    # the lock window should read as 0, not None, so downstream `.fillna(0)`
+    # passes elsewhere don't double-handle.
+    for c in fifa_wc_cols:
+        out[c] = out[c].fillna(0)
+
+    out.to_parquet(dst, index=False)
+    print(f"[17]   rebuilt {dst.name}: {len(out)} players, "
+          f"{len(fifa_wc_cols)} fifa_wc_* cols re-aggregated")
+
+
+def prepare_locked_snapshot(target_round: int, *, force_relock: bool = False) -> Path:
+    """Materialise / reuse the post-Round-(target-1) snapshot directory.
+
+    Strategy:
+      1. Filter per-round / per-match source tables to data from rounds
+         <= lock_round (lock_round = target - 1).
+      2. REBUILD cumulative aggregates (`wc26_stg_fantasy_player_totals`,
+         `wc26_stg_player_powerrank`, `wc26_stg_players_view`) from the
+         filtered sources so they only reflect locked rounds — never partial
+         in-flight round data.
+      3. Copy non-round-dependent tables (schedule, markets, identity, squad
+         rosters) as-is.
+
+    First call creates the snapshot; subsequent calls reuse it unless
+    force_relock=True (env RELOCK=1 also forces). The path is then bound to
+    `lib.recommender.PROC` so every downstream loader reads the frozen copy.
+    """
+    lock_round = max(0, target_round - 1)
+    lock_dir = LOCKED_ROOT / f"post_round_{lock_round:02d}"
+    if lock_dir.exists() and not force_relock:
+        print(f"[17] reusing locked snapshot: {lock_dir.relative_to(ROOT)}")
+        return lock_dir
+    if lock_dir.exists():
+        print(f"[17] force-relock: wiping {lock_dir.relative_to(ROOT)}")
+        shutil.rmtree(lock_dir)
+    print(f"[17] creating locked snapshot at {lock_dir.relative_to(ROOT)} "
+          f"(target R{target_round} -> freeze stats up to R{lock_round})")
+    lock_dir.mkdir(parents=True, exist_ok=True)
+
+    # Step 0 — figure out which matches belong to the locked rounds
+    allowed_match_numbers, allowed_fifa_match_ids = _match_ids_through_round(lock_round)
+    print(f"[17]   lock window: {len(allowed_match_numbers)} matches "
+          f"(round_id <= {lock_round})")
+
+    # Step 1 — copy non-round-dependent tables as-is
+    for fname in LOCK_COPIED_AS_IS:
+        src = PROC / fname
+        if not src.exists():
+            print(f"[17]   skip {fname} (missing)")
+            continue
+        shutil.copy2(src, lock_dir / fname)
+
+    # Step 2a — filter per-round fantasy stats
+    src_prs = PROC / LOCK_FILTERED_PER_ROUND
+    dst_prs = lock_dir / LOCK_FILTERED_PER_ROUND
+    if src_prs.exists():
+        prs = pd.read_parquet(src_prs)
+        before = len(prs)
+        if "round_id" in prs.columns:
+            prs = prs[prs["round_id"].astype(int) <= lock_round]
+        prs.to_parquet(dst_prs, index=False)
+        print(f"[17]   {LOCK_FILTERED_PER_ROUND}: kept {len(prs)}/{before} rows")
+    else:
+        print(f"[17]   skip {LOCK_FILTERED_PER_ROUND} (missing)")
+
+    # Step 2b — filter per-match wide tables (FIFA stats + FDH powerrank)
+    for fname in LOCK_FILTERED_PER_MATCH:
+        src = PROC / fname
+        if not src.exists():
+            print(f"[17]   skip {fname} (missing)")
+            continue
+        df = pd.read_parquet(src)
+        before = len(df)
+        if "match_number" in df.columns and allowed_match_numbers:
+            df = df[df["match_number"].astype("Int64").isin(allowed_match_numbers)]
+        elif "fifa_match_id" in df.columns and allowed_fifa_match_ids:
+            df = df[df["fifa_match_id"].astype(str).isin(allowed_fifa_match_ids)]
+        df.to_parquet(lock_dir / fname, index=False)
+        print(f"[17]   {fname}: kept {len(df)}/{before} rows")
+
+    # Step 3 — rebuild aggregates from the filtered sources
+    if dst_prs.exists():
+        _rebuild_fantasy_totals(
+            dst_prs, lock_dir / "wc26_stg_fantasy_player_totals.parquet",
+        )
+    src_match_pr = lock_dir / "wc26_player_match_powerrank.parquet"
+    if src_match_pr.exists():
+        _rebuild_player_powerrank(
+            src_match_pr, lock_dir / "wc26_stg_player_powerrank.parquet",
+        )
+    src_wide = lock_dir / "wc26_player_match_stats_wide.parquet"
+    live_view = PROC / "wc26_stg_players_view.parquet"
+    if src_wide.exists() and live_view.exists():
+        _rebuild_stg_players_view_fifa_wc(
+            src_wide, live_view, lock_dir / "wc26_stg_players_view.parquet",
+        )
+        # The wide stg_players is referenced indirectly by some callers; if
+        # present in live, mirror the same fifa_wc_* override pass onto it.
+        live_stg = PROC / "wc26_stg_players.parquet"
+        if live_stg.exists():
+            _rebuild_stg_players_view_fifa_wc(
+                src_wide, live_stg, lock_dir / "wc26_stg_players.parquet",
+            )
+
+    # Stamp a manifest for traceability + debugging
+    (lock_dir / "_lock_manifest.json").write_text(json.dumps({
+        "target_round": target_round,
+        "lock_round": lock_round,
+        "created_utc": datetime.now(timezone.utc).isoformat(),
+        "locked_match_count": len(allowed_match_numbers),
+        "locked_match_numbers_sample": sorted(allowed_match_numbers)[:10] + ["..."]
+            if len(allowed_match_numbers) > 10 else sorted(allowed_match_numbers),
+        "copied_as_is": [f for f in LOCK_COPIED_AS_IS if (lock_dir / f).exists()],
+        "filtered_per_round": [LOCK_FILTERED_PER_ROUND] if dst_prs.exists() else [],
+        "filtered_per_match": [f for f in LOCK_FILTERED_PER_MATCH if (lock_dir / f).exists()],
+        "rebuilt_aggregates": [f for f in LOCK_REBUILT_FILES if (lock_dir / f).exists()],
+    }, indent=2, default=str))
+    return lock_dir
 
 
 def pick_target_round() -> int:
@@ -166,6 +467,15 @@ def main():
     snapshot_ts = datetime.now(timezone.utc).isoformat()
     target = pick_target_round()
     print(f"[17] target round: {target}  (snapshot {snapshot_ts})")
+
+    # Freeze inputs at post-R(target-1) state. Lib functions look up `PROC`
+    # at call time, so rebinding the module attribute is enough — no edits to
+    # recommender.py needed. Restored before the per-round historical write
+    # so artefacts still land in the LIVE processed dir.
+    force_relock = os.environ.get("RELOCK", "").lower() in ("1", "true", "yes")
+    lock_dir = prepare_locked_snapshot(target, force_relock=force_relock)
+    original_proc = rec_mod.PROC
+    rec_mod.PROC = lock_dir
 
     # 1. Archetypes (mode-agnostic — shared across models)
     print("[17] mining archetypes (retrospective + prospective)…")
@@ -331,6 +641,12 @@ def main():
     safe_sq = dump_js_safe(squads)
     (PROC / "wc26_fantasy_strategy_squads.json").write_text(safe_sq)
     (PWA_JSON / "wc26_fantasy_strategy_squads.json").write_text(safe_sq)
+
+    # Restore live PROC for output-writing and round-status reads. Scoring,
+    # archetypes, fixture profiles all consumed the locked snapshot above;
+    # the historical snapshot + round_tracking blocks below want the live
+    # round statuses + history directory.
+    rec_mod.PROC = original_proc
 
     # 9. Historical snapshot (per-round-lock freeze)
     history_dir = PROC / "history" / f"round_{target:02d}"
