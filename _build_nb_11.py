@@ -324,12 +324,19 @@ before = len(wc_df)
 wc_df = wc_df[wc_df["_md_matches"].fillna(0) > 0].reset_index(drop=True)
 print(f"filtered to players with WC26 appearances: {before} → {len(wc_df)}")
 
-# Backfill appearances/goals/assists/rating from matchDetails when FotMob's
-# tournamentStats hasn't rolled them up yet.
-wc_df["appearances"]    = wc_df["appearances"].fillna(wc_df["_md_matches"])
-wc_df["goals"]          = wc_df["goals"].fillna(wc_df["_md_goals"])
-wc_df["assists"]        = wc_df["assists"].fillna(wc_df["_md_assists"])
-wc_df["fotmob_rating"]  = wc_df["fotmob_rating"].fillna(wc_df["_md_rating"])
+# Backfill appearances/goals/assists/rating from matchDetails. matchDetails
+# is AUTHORITATIVE — we counted the matches the player actually appeared in.
+# FotMob's tournamentStats lags 1-2 days during the tournament and frequently
+# reports STALE NON-NULL values (e.g. appearances=0 after MD1+MD2 played, or
+# appearances=1 after MD2). The previous .fillna() pattern didn't fire on
+# those because nt_apps wasn't null — so the stale value won. Verified
+# 2026-06-25: 582/846 players had undercounted appearances pre-fix. Prefer
+# _md_* across the board; fall back to FotMob's tournamentStats only when
+# matchDetails is missing.
+wc_df["appearances"]    = wc_df["_md_matches"].fillna(wc_df["appearances"])
+wc_df["goals"]          = wc_df["_md_goals"].fillna(wc_df["goals"])
+wc_df["assists"]        = wc_df["_md_assists"].fillna(wc_df["assists"])
+wc_df["fotmob_rating"]  = wc_df["_md_rating"].fillna(wc_df["fotmob_rating"])
 
 # Cards: matchDetails per-player block does NOT carry yellow/red cards.
 # Source them from the recentMatches WC slice (form_df filtered to leagueId=77),

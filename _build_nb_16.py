@@ -179,6 +179,16 @@ stg = stg.merge(arrays_agg, on="fifa_player_id", how="left")
 for col in ("stages_played", "opponents", "match_ids"):
     stg[col] = stg[col].apply(lambda v: v if isinstance(v, list) else [])
 
+# Authoritative WC appearance count: prefer fifa_wc_n_matches (count of distinct
+# fifa_match_ids the player has stats rows for, from fdh-api per-match data)
+# over fotmob_wc_appearances (FotMob's tournamentStats + matchDetails roll-up
+# which lags 1-2 days and silently drops ~400 players whose FotMob match block
+# doesn't parse). The PWA's PlayerDetailSheet reads fotmob_wc_appearances; this
+# override ensures it tracks live as matches finish. Verified 2026-06-25 — was
+# undercounting 582/846 players before the fix.
+if "fifa_wc_n_matches" in stg.columns:
+    stg["fotmob_wc_appearances"] = stg["fifa_wc_n_matches"].fillna(stg["fotmob_wc_appearances"])
+
 print(f"after Block B: {len(stg)} rows, {len(stg.columns)} cols")
 """)
 
