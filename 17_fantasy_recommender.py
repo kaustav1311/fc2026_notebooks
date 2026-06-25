@@ -672,10 +672,26 @@ def main():
     # at call time, so rebinding the module attribute is enough — no edits to
     # recommender.py needed. Restored before the per-round historical write
     # so artefacts still land in the LIVE processed dir.
+    #
+    # ENV controls:
+    #   NOLOCK=1  — bypass the lock for this single run (PROC stays at LIVE,
+    #               so scoring uses the freshest data including any partial
+    #               in-flight round). Useful for one-off diagnostic runs;
+    #               the lock dir on disk is left untouched, so the NEXT run
+    #               (without NOLOCK) reverts to deterministic locked output.
+    #   RELOCK=1  — wipe the lock dir and rebuild from current live PROC
+    #               (use when an existing lock was created mid-round and is
+    #               carrying partial-round contamination).
+    nolock = os.environ.get("NOLOCK", "").lower() in ("1", "true", "yes")
     force_relock = os.environ.get("RELOCK", "").lower() in ("1", "true", "yes")
-    lock_dir = prepare_locked_snapshot(target, force_relock=force_relock)
     original_proc = rec_mod.PROC
-    rec_mod.PROC = lock_dir
+    if nolock:
+        print(f"[17] NOLOCK=1 — bypassing round-lock for this run; "
+              f"scoring uses LIVE PROC. Existing lock dir left untouched.")
+        lock_dir = original_proc  # so the manifest line later still makes sense
+    else:
+        lock_dir = prepare_locked_snapshot(target, force_relock=force_relock)
+        rec_mod.PROC = lock_dir
 
     # 1. Archetypes (mode-agnostic — shared across models)
     print("[17] mining archetypes (retrospective + prospective)…")
