@@ -1,0 +1,34 @@
+{
+  "target_round": 3,
+  "lock_round": 2,
+  "created_utc": "2026-06-25T16:55:25.071566+00:00",
+  "locked_match_count": 48,
+  "locked_match_numbers_sample": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    "..."
+  ],
+  "total_parquets_in_lock": 40,
+  "filtered_per_round": [
+    "fantasy_player_round_stats.parquet"
+  ],
+  "filtered_per_match": [
+    "wc26_player_match_stats_wide.parquet",
+    "wc26_player_match_powerrank.parquet",
+    "wc26_stg_team_match_metrics.parquet"
+  ],
+  "rebuilt_aggregates": [
+    "wc26_stg_fantasy_player_totals.parquet",
+    "wc26_stg_player_powerrank.parquet",
+    "wc26_stg_players_view.parquet",
+    "wc26_stg_players.parquet"
+  ]
+}
