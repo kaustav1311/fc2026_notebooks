@@ -1064,37 +1064,59 @@ def build_joint_picks(model_outputs: dict, top_n: int = 30) -> dict:
 
     # Per-position top — sized to match the PWA Suggested Picks cap (50 total).
     # PWA renders min(emitted, POS_CAP) where POS_CAP is {GK:5, DEF:15, MID:15,
-    # FWD:15} in src/tabs/KsTwoCentsView.tsx — emit at least that many so the
-    # client cap isn't the bottleneck.
+    # FWD:15}. Crucially this list is built from the FULL scored frames, not
+    # restricted to the top-30 union above — otherwise positions starved of
+    # top-30 candidates (e.g. zero GKs in any model's top 30) can never fill.
+    # That bug was producing "12 FWD / 5 DEF / 0 GK" on the PWA.
+    #
+    # Algo per position:
+    #   1. Concatenate every model's rows for that position.
+    #   2. For each (fantasy_player_id), keep the row with the highest
+    #      ev_model — that becomes ev_max + ev_max_model.
+    #   3. Sort by ev_max DESC and take top N.
     per_pos_top = {}
     pos_n = {"GK": 5, "DEF": 15, "MID": 15, "FWD": 15}
     for pos, n in pos_n.items():
-        scored = {}
-        for pid in all_pids:
-            for mid, df in model_outputs.items():
-                row = df[(df["fantasy_player_id"] == pid) & (df["position"] == pos)]
-                if not row.empty:
-                    ev = float(row.iloc[0]["ev_model"])
-                    if pid not in scored or scored[pid][0] < ev:
-                        scored[pid] = (ev, mid, row.iloc[0])
-        ranked = sorted(scored.items(), key=lambda kv: -kv[1][0])[:n]
-        per_pos_top[pos] = [
-            {
+        # Stack per-position slices from every model, tagged with model_id
+        frames = []
+        for mid, df in model_outputs.items():
+            sub = df[df["position"] == pos][[
+                "fantasy_player_id", "ev_model"
+            ]].copy()
+            sub["model_id"] = mid
+            frames.append(sub)
+        if not frames:
+            per_pos_top[pos] = []
+            continue
+        stacked = pd.concat(frames, ignore_index=True)
+        # Best (ev, model) per fantasy_player_id
+        best = stacked.sort_values("ev_model", ascending=False).drop_duplicates(
+            subset="fantasy_player_id", keep="first"
+        )
+        best = best.head(n)
+        # Re-join the identity columns from the model that owned the best row
+        rows_out = []
+        for i, br in enumerate(best.itertuples(index=False)):
+            pid = int(br.fantasy_player_id)
+            mid = br.model_id
+            ev = float(br.ev_model)
+            src = model_outputs[mid]
+            row = src[src["fantasy_player_id"] == pid].iloc[0]
+            rows_out.append({
                 "rank": i + 1,
-                "fantasy_player_id": int(pid),
-                "fifa_player_id": int(r["fifa_player_id"]) if pd.notna(r["fifa_player_id"]) else None,
-                "known_name": r.get("known_name"),
-                "nation_id": r.get("nation_id"),
-                "opponent_nation_id": r.get("opponent_nation_id"),
+                "fantasy_player_id": pid,
+                "fifa_player_id": int(row["fifa_player_id"]) if pd.notna(row.get("fifa_player_id")) else None,
+                "known_name": row.get("known_name"),
+                "nation_id": row.get("nation_id"),
+                "opponent_nation_id": row.get("opponent_nation_id"),
                 "position": pos,
-                "price": float(r.get("price") or 0),
-                "percent_selected": float(r.get("percent_selected") or 0),
-                "ev_max": float(ev),
+                "price": float(row.get("price") or 0),
+                "percent_selected": float(row.get("percent_selected") or 0),
+                "ev_max": ev,
                 "ev_max_model": mid,
-                "fixture_shape": r.get("fixture_shape"),
-            }
-            for i, (pid, (ev, mid, r)) in enumerate(ranked)
-        ]
+                "fixture_shape": row.get("fixture_shape"),
+            })
+        per_pos_top[pos] = rows_out
 
     return {
         "consensus": consensus_rows[:30],
