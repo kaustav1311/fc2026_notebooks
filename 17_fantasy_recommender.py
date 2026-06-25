@@ -42,6 +42,7 @@ from lib.recommender import (
     assemble_sb_hunter_squad,
     build_position_suggestor,
     refresh_live_percent_selected,
+    refresh_squad_captain_and_bench,
     MODEL_REGISTRY,
 )
 
@@ -846,6 +847,33 @@ def main():
     # the historical snapshot + round_tracking blocks below want the live
     # round statuses + history directory.
     rec_mod.PROC = original_proc
+
+    # 8b. Captain on LIVE data + MID/FWD preference + bench priority order.
+    # Squad SELECTION stayed lock-bounded to kill the leak; captain CHOICE
+    # benefits from fresh form (who's actually scoring right now). We run
+    # ONE live-PROC scoring pass under the Banker weights and use those EVs
+    # to re-pick captain + re-order bench per squad. Single pass is enough —
+    # captain ranking is robust to the model weight choice.
+    print("[17] refreshing captain + bench on live data…")
+    try:
+        live_fx = assemble_fixture_profile(target)
+        live_scored = score_for_model(target, live_fx, "m1_banker",
+                                      live_pct_selected=live_pct)
+        live_ev_by_pid = dict(
+            zip(live_scored["fantasy_player_id"].astype(int),
+                live_scored["ev_model"].astype(float))
+        )
+        for sq in squads:
+            refresh_squad_captain_and_bench(sq, live_ev_by_pid)
+        print(f"[17]   refreshed captain on {len(squads)} squads "
+              f"(live EVs available for {len(live_ev_by_pid)} players)")
+        # Re-write strategy squads with the refreshed captain + bench order
+        safe_sq = dump_js_safe(squads)
+        (PROC / "wc26_fantasy_strategy_squads.json").write_text(safe_sq)
+        (PWA_JSON / "wc26_fantasy_strategy_squads.json").write_text(safe_sq)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[17]   WARN: live captain refresh failed ({exc}); "
+              f"sticking with lock-bounded captain")
 
     # 9. Historical snapshot (per-round-lock freeze)
     history_dir = PROC / "history" / f"round_{target:02d}"

@@ -2289,6 +2289,82 @@ def assemble_sb_hunter_squad(scored: pd.DataFrame, strat: dict,
 # ─── Position Suggestor surface ──────────────────────────────────────────────
 
 
+def refresh_squad_captain_and_bench(
+    squad: dict,
+    live_ev_by_pid: dict,
+) -> dict:
+    """Re-pick captain (and re-order bench priority) using LIVE EV.
+
+    The squad SELECTION respects the locked snapshot (anti-leak), but the
+    captain decision benefits from live data — "who's actually scoring right
+    now" — so this helper takes live ev_model values and:
+      1. Picks captain from XI restricted to MID + FWD (FIFA Fantasy scoring
+         heavily favours attackers for captain — 4-6 pts/goal vs 1-pt
+         appearance baseline). Falls back to all XI if no MID/FWD.
+      2. Vice = 2nd best by live ev within the same pool.
+      3. Re-orders bench within each position by live ev (auto-sub
+         priority — FIFA picks the first matching-position bench player
+         when a starter misses, so highest live ev should sit first).
+      4. Recomputes projected_pts_with_captain using live ev for captain
+         and locked ev_strategy for everyone else.
+
+    Mutates `squad` in place AND returns it for chaining.
+    """
+    xi = squad.get("starting_xi") or []
+    if not xi:
+        return squad
+
+    def _live_ev(p):
+        return float(live_ev_by_pid.get(p["fantasy_player_id"],
+                                        p.get("ev_strategy", 0)))
+
+    attackers = [p for p in xi if p.get("position") in ("MID", "FWD")]
+    pool = attackers if attackers else xi
+    pool_sorted = sorted(pool, key=lambda p: -_live_ev(p))
+    new_captain = int(pool_sorted[0]["fantasy_player_id"])
+    new_vice = int(pool_sorted[1]["fantasy_player_id"]) if len(pool_sorted) > 1 else None
+
+    for p in xi:
+        pid = int(p["fantasy_player_id"])
+        p["captain"] = (pid == new_captain)
+        p["vice_captain"] = (pid == new_vice)
+        # Stash live ev on the slimmed row so the PWA can show "live vs
+        # locked" if it wants.
+        p["ev_live"] = round(_live_ev(p), 2)
+
+    squad["captain_id"] = new_captain
+    squad["vice_captain_id"] = new_vice
+    squad["captain_picked_by"] = "live_ev_mid_fwd_preferred"
+
+    # Re-order bench within position — highest live ev first so auto-sub
+    # picks the best backup when FIFA Fantasy reaches into the bench.
+    bench = squad.get("bench") or []
+    by_pos = {"GK": [], "DEF": [], "MID": [], "FWD": []}
+    for b in bench:
+        by_pos.setdefault(b.get("position"), []).append(b)
+    bench_sorted = []
+    # FIFA's auto-sub order: GK→DEF→MID→FWD position match; within each, ev desc.
+    for pos in ("GK", "DEF", "MID", "FWD"):
+        for p in sorted(by_pos.get(pos, []), key=lambda x: -float(live_ev_by_pid.get(x["fantasy_player_id"], x.get("ev_strategy", 0)))):
+            p["ev_live"] = round(float(live_ev_by_pid.get(p["fantasy_player_id"], p.get("ev_strategy", 0))), 2)
+            bench_sorted.append(p)
+    squad["bench"] = bench_sorted
+
+    # Recompute projected = sum(locked ev for XI) + live_ev(captain)
+    xi_ev_sum = sum(float(p.get("ev_strategy", 0)) for p in xi)
+    cap_bonus = float(live_ev_by_pid.get(new_captain,
+                                         next((p["ev_strategy"] for p in xi
+                                               if p["fantasy_player_id"] == new_captain), 0)))
+    squad["projected_pts_with_captain"] = round(xi_ev_sum + cap_bonus, 2)
+    squad["projected_pts_breakdown"] = {
+        "xi_locked_ev_sum": round(xi_ev_sum, 2),
+        "captain_live_bonus": round(cap_bonus, 2),
+        "captain_id": new_captain,
+        "note": "XI EV from round-locked stats (anti-leak); captain bonus uses LIVE ev for next-round form sensitivity.",
+    }
+    return squad
+
+
 def build_position_suggestor(scored: pd.DataFrame) -> dict:
     """Two surfaces:
       1. top_15_overall — top 15 ranked across all positions by ensemble ev
@@ -2432,15 +2508,83 @@ def compute_round_actuals(model_id: str, round_id: int,
                 entry["promoted_captain"] = True
                 break
 
-    bench_actuals = [
+    # ── Auto-substitution (FIFA Fantasy WC2026 rule) ─────────────────────────
+    # For each non-playing starter (minutes_played == 0), find the highest-
+    # priority bench player who DID play and whose position can fill the slot
+    # without breaking formation minimums (GK=1, DEF≥3, MID≥2, FWD≥1 inside
+    # the final XI). Bench priority comes from the round-lock refresh —
+    # ordered by live ev within position (GK→DEF→MID→FWD).
+    bench_raw = squad_for_round.get("bench", []) or []
+    bench_pool = [
         {
             "fantasy_player_id": int(p["fantasy_player_id"]),
             "known_name": p.get("known_name"),
             "position": p["position"],
             "raw_pts": float(pts_by_pid.get(int(p["fantasy_player_id"]), 0) or 0),
+            "minutes_played": float(minutes_by_pid.get(int(p["fantasy_player_id"]), 0) or 0),
+            "auto_subbed_in": False,
         }
-        for p in squad_for_round.get("bench", [])
+        for p in bench_raw
     ]
+    # Snapshot of current XI composition (used to gate outfield swaps).
+    def _xi_pos_counts(entries):
+        c = {"GK": 0, "DEF": 0, "MID": 0, "FWD": 0}
+        for e in entries:
+            c[e["position"]] = c.get(e["position"], 0) + 1
+        return c
+
+    auto_subs = []
+    # Iterate non-playing starters in stable order so multi-sub scenarios are
+    # deterministic. GK sub is independent (separate slot); outfield subs
+    # must preserve DEF≥3, MID≥2, FWD≥1 in the post-sub XI.
+    for starter in starting_xi_actuals:
+        if starter["minutes_played"] > 0:
+            continue  # played, no sub needed
+        s_pos = starter["position"]
+        # Find best eligible bench candidate
+        for cand in bench_pool:
+            if cand["auto_subbed_in"]:
+                continue
+            if cand["minutes_played"] <= 0:
+                continue  # bench player didn't play either
+            if s_pos == "GK":
+                # GK ↔ GK only
+                if cand["position"] != "GK":
+                    continue
+            else:
+                # Outfield: bench candidate's position must not violate the
+                # post-sub min-formation. Build a hypothetical XI without the
+                # missing starter + with the candidate.
+                hypo = [e for e in starting_xi_actuals if e is not starter]
+                hypo_counts = _xi_pos_counts(hypo)
+                hypo_counts[cand["position"]] = hypo_counts.get(cand["position"], 0) + 1
+                if (hypo_counts["DEF"] < 3 or hypo_counts["MID"] < 2 or
+                        hypo_counts["FWD"] < 1):
+                    continue
+            # Apply the sub
+            sub_pts = cand["raw_pts"]
+            # If the auto-subbed-in player is the vice-captain AND captain
+            # didn't play, vice→captain doubling already happened above;
+            # don't double-count.
+            cap_double = (cand["fantasy_player_id"] == captain_id and not captain_played)
+            effective = sub_pts * (2 if cap_double else 1)
+            xi_total += effective
+            starter["auto_subbed_out"] = True
+            starter["auto_sub_replacement_id"] = cand["fantasy_player_id"]
+            starter["auto_sub_replacement_name"] = cand["known_name"]
+            starter["auto_sub_replacement_pts"] = effective
+            cand["auto_subbed_in"] = True
+            cand["replaced_player_id"] = starter["fantasy_player_id"]
+            cand["replaced_player_name"] = starter["known_name"]
+            cand["effective_pts"] = effective
+            auto_subs.append({
+                "out": starter["fantasy_player_id"],
+                "in": cand["fantasy_player_id"],
+                "pts_added": effective,
+            })
+            break
+
+    bench_actuals = bench_pool
 
     # Transfers
     transfer_count = 0
@@ -2472,6 +2616,7 @@ def compute_round_actuals(model_id: str, round_id: int,
         "transfers_in": transfers_in,
         "transfers_out": transfers_out,
         "captain_played": captain_played,
+        "auto_subs": auto_subs,
     }
 
 
