@@ -7,3 +7,4 @@ lxml>=5.0
 remotezip>=0.12
 nbformat>=5
 nbclient>=0.10
+scikit-learn>=1.4
