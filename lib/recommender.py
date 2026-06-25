@@ -1062,9 +1062,12 @@ def build_joint_picks(model_outputs: dict, top_n: int = 30) -> dict:
     for mid in surprise_rows:
         surprise_rows[mid].sort(key=lambda r: -r["max_ev"])
 
-    # Per-position top 5: max ev across models
+    # Per-position top — sized to match the PWA Suggested Picks cap (50 total).
+    # PWA renders min(emitted, POS_CAP) where POS_CAP is {GK:5, DEF:15, MID:15,
+    # FWD:15} in src/tabs/KsTwoCentsView.tsx — emit at least that many so the
+    # client cap isn't the bottleneck.
     per_pos_top = {}
-    pos_n = {"GK": 3, "DEF": 5, "MID": 5, "FWD": 5}
+    pos_n = {"GK": 5, "DEF": 15, "MID": 15, "FWD": 15}
     for pos, n in pos_n.items():
         scored = {}
         for pid in all_pids:
@@ -1777,6 +1780,67 @@ def _ev_strategy(scored: pd.DataFrame, strat: dict) -> pd.Series:
     )
 
 
+# ── FIFA WC2026 Fantasy boosters: forward-looking chip plan ────────────────
+#
+# Source of truth: play.fifa.com/fantasy/help/guidelines (snapshot
+# `E:\fantasy_guidelinesfc2.txt` 2026-06-25). PWA mirror:
+# src/data/fantasyRules.ts (BOOSTERS list).
+#
+# Eligibility constraints (from rules):
+#   - wildcard: cannot be used MD1 (round 1) or R32 (round 4)
+#   - qualification_booster: R32+ (round 4+)
+#   - mystery_booster: revealed at R32 lock — usable in any KO round (4..8)
+#   - 12th_man, max_captain: any round (1..8)
+#
+# Heuristic per-model plan — chosen to express each model's "best round to
+# fire": Banker plays late once confidence builds; Form Hunter fires Wildcard
+# at R16 once mid-tournament form has revealed itself; Stat Max stockpiles
+# Max-Captain for the deepest knockouts; SB Hunter fires early because
+# differentials peak when the field is widest.
+#
+# TODO(nb_17): replace with data-driven planning (per-model EV variance per
+# round) once a multi-checkpoint history exists.
+
+_CHIP_PLAN_BY_MODEL = {
+    "m1_banker":      {"wildcard": 3, "twelfth_man": 8, "max_captain": 6, "qualification_booster": 7, "mystery_booster": 4},
+    "m2_form_hunter": {"wildcard": 5, "twelfth_man": 4, "max_captain": 7, "qualification_booster": 6, "mystery_booster": 4},
+    "m3_stat_max":    {"wildcard": 8, "twelfth_man": 5, "max_captain": 8, "qualification_booster": 7, "mystery_booster": 5},
+    "m4_sb_hunter":   {"wildcard": 5, "twelfth_man": 4, "max_captain": 4, "qualification_booster": 5, "mystery_booster": 6},
+}
+_CHIP_PLAN_DEFAULT = {
+    "wildcard": 4, "twelfth_man": 4, "max_captain": 6,
+    "qualification_booster": 5, "mystery_booster": 4,
+}
+# Per-chip eligibility for a given round_id (1..8).
+_CHIP_ELIGIBLE = {
+    "wildcard":              lambda r: r != 1 and r != 4,
+    "twelfth_man":           lambda r: 1 <= r <= 8,
+    "max_captain":           lambda r: 1 <= r <= 8,
+    "qualification_booster": lambda r: 4 <= r <= 8,
+    "mystery_booster":       lambda r: 4 <= r <= 8,
+}
+
+
+def plan_chips(model_id: str, target_round_id: int) -> dict:
+    """Emit a forward-looking chip plan: {chip_id: planned_round_id}.
+
+    Per-model heuristic mapped above. If a chip's preferred round is < the
+    current target_round_id (i.e. the lock already passed without firing it),
+    snap to the next eligible round so the plan stays usable.
+    """
+    base = _CHIP_PLAN_BY_MODEL.get(model_id, _CHIP_PLAN_DEFAULT)
+    plan = {}
+    for chip, round_id in base.items():
+        if round_id < target_round_id:
+            # Find next eligible round ≥ target.
+            for r in range(target_round_id, 9):
+                if _CHIP_ELIGIBLE[chip](r):
+                    round_id = r
+                    break
+        plan[chip] = int(round_id)
+    return plan
+
+
 def assemble_strategy_squad(scored: pd.DataFrame, strat: dict,
                              budget_m: float = 100.0,
                              max_per_nation: int = 3,
@@ -1962,6 +2026,21 @@ def assemble_strategy_squad(scored: pd.DataFrame, strat: dict,
         "bench": [slim(p) for p in bench],
         "twelfth_man": slim(twelfth_pick) if twelfth_pick else None,
         "non_budget_mode": non_budget,
+        # ── FIFA WC2026 rule-aware fields (consumed by KsTwoCentsView) ──
+        # Forward-looking chip schedule per model (see plan_chips() above).
+        "chip_plan": plan_chips(strat["id"], int(strat.get("target_round_id", 3) or 3)),
+        # Per-round transfer accounting — populated by the multi-checkpoint
+        # emitter once snapshot history exists. Stub-zero today so the PWA's
+        # transfer strip can render without optional-chaining at every read.
+        # TODO(nb_17): diff against the prior snapshot's squad to populate
+        # planned_transfer_count + pending_in/out at each FIFA lock window.
+        "planned_transfer_count": 0,
+        "pending_in": [],
+        "pending_out": [],
+        # Checkpoint cadence stub — single entry today, becomes a list of
+        # past snapshots once the warehouse archives each FIFA lock emit
+        # (R3 → post-MD3 / pre-R32 → post-R32 / pre-R16 → …).
+        "checkpoints": [],
     }
 
 
@@ -2176,6 +2255,12 @@ def assemble_sb_hunter_squad(scored: pd.DataFrame, strat: dict,
             {"role": "sure_shot_fwd", "count": sum(1 for r in anchor_meta.values() if r == "sure_shot_fwd")},
             {"role": "influential_mid", "count": sum(1 for r in anchor_meta.values() if r == "influential_mid")},
         ],
+        # ── FIFA WC2026 rule-aware fields (see assemble_strategy_squad) ──
+        "chip_plan": plan_chips(strat["id"], int(strat.get("target_round_id", 3) or 3)),
+        "planned_transfer_count": 0,
+        "pending_in": [],
+        "pending_out": [],
+        "checkpoints": [],
     }
 
 

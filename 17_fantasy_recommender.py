@@ -306,6 +306,9 @@ def main():
     squads = []
     for mid, cfg in MODEL_REGISTRY.items():
         strat = model_to_strategy(mid, cfg)
+        # Thread target round into strat so the assembler's plan_chips() can
+        # snap chip rounds forward past the current FIFA lock window.
+        strat["target_round_id"] = target
         scored = model_outputs[mid]
         assembler_kind = cfg.get("assembler", "default")
         if assembler_kind == "sb_hunter":
