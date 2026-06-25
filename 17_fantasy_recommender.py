@@ -169,6 +169,157 @@ def _rebuild_player_powerrank(src_match_powerrank: Path, dst: Path) -> None:
     print(f"[17]   rebuilt {dst.name}: {len(out)} (player, team) pairs")
 
 
+# Per-match FotMob columns we can rebuild directly (sum / mean per player
+# within the lock window). Everything else FotMob ships (chances_created,
+# big_chances_created, dribbles, touches, touches_opp_box,
+# defensive_contributions, tackles, fouls_committed, xg_against_on_pitch,
+# successful_dribbles_pct, duels_won, duels_won_pct) has no per-match
+# analogue in wc26_player_recent_matches_fotmob — those get the scaled
+# treatment below.
+_FOTMOB_REBUILDABLE_COUNTERS = [
+    ("goals", "fotmob_wc_goals"),
+    ("assists", "fotmob_wc_assists"),
+    ("minutes_played", "fotmob_wc_minutes_played"),
+    ("yellow_cards", "fotmob_wc_yellow_cards"),
+    ("red_cards", "fotmob_wc_red_cards"),
+]
+# Cumulative non-recoverable FotMob WC cols — proportionally scaled by the
+# played-in-lock / played-live ratio (uniform per-match production assumption).
+_FOTMOB_SCALABLE_COUNTERS = [
+    "fotmob_wc_chances_created",
+    "fotmob_wc_big_chances_created",
+    "fotmob_wc_dribbles",
+    "fotmob_wc_duels_won",
+    "fotmob_wc_touches",
+    "fotmob_wc_touches_opp_box",
+    "fotmob_wc_defensive_contributions",
+    "fotmob_wc_tackles",
+    "fotmob_wc_fouls_committed",
+    "fotmob_wc_xg_against_on_pitch",
+]
+# Rate / percentage cols — distribution-invariant under uniform-production,
+# so the live values can be kept as-is even when the cumulative volume is
+# scaled. The model only reads the rate.
+_FOTMOB_KEEP_AS_IS_RATES = [
+    "fotmob_wc_successful_dribbles_pct",
+    "fotmob_wc_duels_won_pct",
+    "fotmob_wc_fotmob_rating",  # mean rating — overwritten by per-match rebuild below
+]
+
+
+def _rebuild_fotmob_wc_aggregates(
+    recent_src: Path,
+    view_path: Path,
+    lock_end_utc: pd.Timestamp,
+    wc_start_utc: pd.Timestamp = pd.Timestamp("2026-06-11", tz="UTC"),
+) -> None:
+    """Rewind every fotmob_wc_* col in stg_players_view to its post-lock state.
+
+    Two-track strategy:
+      1. RECOVERABLE counters (goals, assists, minutes, yellows, reds, rating)
+         — rebuilt from wc26_player_recent_matches_fotmob filtered to WC2026
+         matches with match_date_utc in [wc_start_utc, lock_end_utc].
+      2. NON-RECOVERABLE counters (chances_created, dribbles, touches, …)
+         — scaled by (lock_apps / live_apps) per player. Falls back to 0 when
+         the player has any post-lock appearances and live_apps > 0 but the
+         per-match recent feed says lock_apps = 0 (i.e. all play was post-lock).
+
+    Rates (pct cols) stay live — distribution-invariant under uniform-production.
+    """
+    if not recent_src.exists() or not view_path.exists():
+        print(f"[17]   skip fotmob_wc rebuild (missing {recent_src.name if not recent_src.exists() else view_path.name})")
+        return
+    rm = pd.read_parquet(recent_src)
+    view = pd.read_parquet(view_path)
+
+    # WC2026 only — league_id 77 includes qualifiers going back to 2025-09,
+    # so we additionally bound by tournament start date (2026-06-11 UTC).
+    is_wc = (rm["league_id"] == 77) | (
+        rm["league_name"].fillna("").str.contains("world cup", case=False, na=False)
+    )
+    rm["match_date_utc"] = pd.to_datetime(rm["match_date_utc"], utc=True, errors="coerce")
+    in_tournament = rm["match_date_utc"].between(wc_start_utc, lock_end_utc, inclusive="both")
+    locked = rm[is_wc & in_tournament].copy()
+    # "Live" = same filter but bounded only by tournament window — used for
+    # the apps ratio to scale non-recoverable counters.
+    live = rm[is_wc & (rm["match_date_utc"] >= wc_start_utc)].copy()
+
+    # Apps counters per player (lock vs live)
+    def _apps(frame: pd.DataFrame) -> dict:
+        played = frame[frame["minutes_played"].fillna(0) > 0]
+        return played.groupby("fifa_player_id")["match_id_fotmob"].nunique().to_dict()
+
+    lock_apps = _apps(locked)
+    live_apps = _apps(live)
+
+    # Build the per-player rebuilt aggregates from `locked`
+    played_lock = locked[locked["minutes_played"].fillna(0) > 0].copy()
+    agg_counters = played_lock.groupby("fifa_player_id").agg(
+        fotmob_wc_goals=("goals", "sum"),
+        fotmob_wc_assists=("assists", "sum"),
+        fotmob_wc_minutes_played=("minutes_played", "sum"),
+        fotmob_wc_yellow_cards=("yellow_cards", "sum"),
+        fotmob_wc_red_cards=("red_cards", "sum"),
+    ).reset_index()
+
+    # Mean rating excluding zero / null (FotMob writes 0 for unrated / very-short)
+    rating_rows = played_lock[played_lock["fotmob_rating"].fillna(0) > 0]
+    rating_agg = rating_rows.groupby("fifa_player_id")["fotmob_rating"].mean().reset_index()
+    rating_agg = rating_agg.rename(columns={"fotmob_rating": "fotmob_wc_fotmob_rating"})
+
+    # Merge rebuilds onto the view — overwriting any existing fotmob_wc_* col.
+    drop_cols = [c for c, _ in _FOTMOB_REBUILDABLE_COUNTERS] + [
+        "fotmob_wc_fotmob_rating",
+    ]
+    drop_cols = [c for c in drop_cols if c in view.columns]
+    # Also will overwrite scaled cols below.
+    overwrite_cols = drop_cols + [c for c in _FOTMOB_SCALABLE_COUNTERS if c in view.columns]
+    # Save originals for the scaling step
+    live_view_cols = view[["fifa_player_id"] + [c for c in _FOTMOB_SCALABLE_COUNTERS if c in view.columns]].copy()
+
+    view = view.drop(columns=overwrite_cols, errors="ignore")
+    view = view.merge(agg_counters, on="fifa_player_id", how="left")
+    view = view.merge(rating_agg, on="fifa_player_id", how="left")
+
+    # Fill rebuilt counters with 0 — a player with no locked-window play
+    # should read as 0 across the recoverable counters.
+    for _, view_col in _FOTMOB_REBUILDABLE_COUNTERS:
+        if view_col in view.columns:
+            view[view_col] = view[view_col].fillna(0)
+    if "fotmob_wc_fotmob_rating" in view.columns:
+        # No rating signal for players with no locked play yet — leave NaN so
+        # the model treats it as missing (matches the live FotMob convention).
+        pass
+
+    # Re-attach + scale the non-recoverable counters: scaled = live * (lock_apps / live_apps)
+    if _FOTMOB_SCALABLE_COUNTERS:
+        live_view_cols["lock_apps"] = live_view_cols["fifa_player_id"].map(lock_apps).fillna(0)
+        live_view_cols["live_apps"] = live_view_cols["fifa_player_id"].map(live_apps).fillna(0)
+        # Ratio: 1.0 when no live play yet (no contamination), else lock/live.
+        # Players with live_apps > 0 AND lock_apps = 0 → ratio = 0 (everything
+        # they "have" was earned post-lock; remove it).
+        ratio = np.where(
+            live_view_cols["live_apps"] > 0,
+            live_view_cols["lock_apps"] / live_view_cols["live_apps"].replace(0, 1),
+            1.0,
+        )
+        for col in _FOTMOB_SCALABLE_COUNTERS:
+            if col not in live_view_cols.columns:
+                continue
+            live_view_cols[col] = pd.to_numeric(live_view_cols[col], errors="coerce") * ratio
+        # Merge scaled values back
+        view = view.merge(
+            live_view_cols[["fifa_player_id"] + [c for c in _FOTMOB_SCALABLE_COUNTERS if c in live_view_cols.columns]],
+            on="fifa_player_id", how="left",
+        )
+
+    view.to_parquet(view_path, index=False)
+    rebuilt = [c for _, c in _FOTMOB_REBUILDABLE_COUNTERS if c in view.columns]
+    scaled = [c for c in _FOTMOB_SCALABLE_COUNTERS if c in view.columns]
+    print(f"[17]   rebuilt fotmob_wc_* in {view_path.name}: "
+          f"{len(rebuilt)} from per-match, {len(scaled)} scaled by lock/live apps ratio")
+
+
 def _rebuild_stg_players_view_fifa_wc(src_wide: Path, live_view_src: Path, dst: Path) -> None:
     """Re-aggregate the fifa_wc_* / fotmob_wc_appearances columns from the
     filtered wide table, then graft them onto the LIVE stg_players_view so
@@ -352,6 +503,34 @@ def prepare_locked_snapshot(target_round: int, *, force_relock: bool = False) ->
             _rebuild_stg_players_view_fifa_wc(
                 src_wide, live_stg, lock_dir / "wc26_stg_players.parquet",
             )
+
+    # Rebuild fotmob_wc_* on top — closes the previous partial-leak where
+    # FotMob's pre-aggregated tournament rollup reflected "now" rather than
+    # the lock window. Recoverable cols are summed from per-match recent
+    # matches filtered to the lock date window; non-recoverable cols are
+    # scaled by the played-in-lock / played-live ratio per player.
+    recent_fotmob = lock_dir / "wc26_player_recent_matches_fotmob.parquet"
+    if recent_fotmob.exists() and (PROC / "wc26_stg_matches.parquet").exists():
+        # Lock window ends at the LATEST kickoff of any match with
+        # match_number ≤ max_match_for_lock. allowed_fifa_match_ids was built
+        # from those rows so we re-derive the cutoff from stg_matches.
+        m_all = pd.read_parquet(PROC / "wc26_stg_matches.parquet")
+        if allowed_fifa_match_ids:
+            m_in_lock = m_all[m_all["fifa_match_id"].astype(str).isin(allowed_fifa_match_ids)]
+            lock_end_utc = pd.to_datetime(m_in_lock["kickoff_utc"], utc=True, errors="coerce").max()
+            if pd.notna(lock_end_utc):
+                _rebuild_fotmob_wc_aggregates(
+                    recent_fotmob,
+                    lock_dir / "wc26_stg_players_view.parquet",
+                    lock_end_utc,
+                )
+                # Mirror onto wide stg_players too if present
+                if (lock_dir / "wc26_stg_players.parquet").exists():
+                    _rebuild_fotmob_wc_aggregates(
+                        recent_fotmob,
+                        lock_dir / "wc26_stg_players.parquet",
+                        lock_end_utc,
+                    )
 
     # Stamp a manifest for traceability + debugging
     (lock_dir / "_lock_manifest.json").write_text(json.dumps({

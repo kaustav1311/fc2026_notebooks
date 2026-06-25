@@ -126,8 +126,38 @@ def sheet_overview(wb: Workbook) -> None:
 def sheet_factor_catalog(wb: Workbook) -> None:
     s = wb.create_sheet("Factor catalog")
     add_title(s, "Factor catalog — every §A through §I factor",
-              "EDA |corr| col shows MD1+MD2 max |corr| with actual fantasy points. "
+              "EDA |corr| col = MAX |corr| between the factor (computed over MD1+MD2) "
+              "and actual MD1+MD2 fantasy points. "
+              "CAVEAT: this is CONTEMPORANEOUS correlation — not predictive validation. "
+              "Factors that ARE the events points are computed from (goals, assists, "
+              "clean sheets, form, avg_points) will show inflated |corr| by construction. "
+              "See AUTOCORRELATION AUDIT below — autocorrelated factors are flagged "
+              "with handling notes in the Definition column. "
               "'Status' = ACTIVE / DROPPED / DEFERRED.")
+
+    # Autocorrelation audit — three-row block above the headers so readers
+    # see the methodology caveat BEFORE scanning the |corr| column.
+    s["A3"] = "AUTOCORRELATION AUDIT"
+    s["A3"].font = H2
+    audit = [
+        ["Question", "Answer"],
+        ["Why does |corr| look so high for some factors?",
+         "Fantasy points are LITERALLY a function of in-match events: goal=4-6pts, assist=3pts, clean_sheet=4/5pts, save_chunks=+1, etc. Any factor that IS one of those event counts (B7 shots_on_target=0.65, B11 CS_prior=0.44, C1 XG=0.63, C2 assists=0.42) trivially correlates with points because it's almost computed from the same data. Same trap for LAGGED-TARGET factors (form, avg_pts, total_pts) — they ARE past fantasy points being used to predict future fantasy points."],
+        ["How is this handled in the model?",
+         "Three mechanisms: (1) ROUND-LOCK isolates 'lagged' from 'concurrent' — R3 emits only see ≤R2 stats, so B4 Fantasy Meta becomes a genuinely lagged signal, not a sneak preview of R3 itself. (2) DAMPENERS — C-NEW avg_points carries a hard ×0.3 coefficient; form prefers independent fotmob_rating (0.46) over fantasy.form (0.80). (3) ENSEMBLE DIVERSIFICATION — M3 Stat Maximizer holds w_B4 at 0.10 (vs 0.35-0.40 in M1/M4) so the consensus signal isn't dominated by lagged points."],
+        ["Which factors are autocorrelated with the target?",
+         "HIGH risk (lagged target itself): C5 form 0.80 / C-NEW avg_points 0.83 / Bracket B4 (uses form, avg_pts, total_pts, last_round_points). MEDIUM (event-coupled — same window): B7 SoT 0.65 / B11 CS_prior 0.44 / C1 XG 0.63 / B14 powerrank 0.63. LOW (independent / pre-tournament priors): A14 nation_strength 0.71 / A2b moneyline_lopsidedness / A4 goals_index / B1 start_prob 0.17 / A12 365_trends. Independent signals are the model's predictive backbone; event-coupled features are gated by the round-lock so they're lagged not concurrent."],
+        ["Is M3 Stat Maximizer the 'autocorrelation-free' counter-weight?",
+         "Yes — by design. M3 weights B2 WC Perf at 0.50 (per-match FIFA stats — event-coupled but lagged via lock) and B4 Fantasy Meta at just 0.10. Its disagreement with M1 Banker (w_B4=0.35) is what makes consensus picks meaningful — when M3 AND M1 agree, the player is good both by independent stats and by lagged fantasy meta. Surprises from M3 alone tend to be undervalued by the fantasy market because they're not yet showing up in pts/form."],
+    ]
+    for i, row in enumerate(audit, start=4):
+        for j, v in enumerate(row, start=1):
+            s.cell(row=i, column=j, value=v)
+    style_header_row(s, 4, 2)
+    style_body(s, 5, 4 + len(audit) - 1, 2)
+    # Spacer row before main table
+    main_row_start = 4 + len(audit) + 2
+    s.cell(row=main_row_start - 1, column=1, value="FACTOR INVENTORY").font = H2
 
     headers = ["ID", "Name", "Bucket", "Position scope", "Source table.column",
                "Transform", "EDA |corr|", "Weight (default)", "Status", "Definition / notes"]
@@ -287,15 +317,17 @@ def sheet_factor_catalog(wb: Workbook) -> None:
          "Normalized [-1, +1]; produces shape enum", "0.71", "HEAVY", "ACTIVE",
          "The §I output that feeds A14."],
     ]
-    for i, row in enumerate(rows, start=5):
+    header_row = main_row_start
+    body_start = header_row + 1
+    for j, h in enumerate(headers, start=1):
+        s.cell(row=header_row, column=j, value=h)
+    style_header_row(s, header_row, len(headers))
+    for i, row in enumerate(rows, start=body_start):
         for j, val in enumerate(row, start=1):
             s.cell(row=i, column=j, value=val)
-    style_header_row(s, 4, len(headers))
-    for j, h in enumerate(headers, start=1):
-        s.cell(row=4, column=j, value=h)
-    style_body(s, 5, 5 + len(rows) - 1, len(headers))
-    set_widths(s, {1: 6, 2: 30, 3: 12, 4: 14, 5: 35, 6: 35, 7: 12, 8: 14, 9: 14, 10: 50})
-    s.freeze_panes = "A5"
+    style_body(s, body_start, body_start + len(rows) - 1, len(headers))
+    set_widths(s, {1: 6, 2: 30, 3: 12, 4: 14, 5: 35, 6: 35, 7: 16, 8: 14, 9: 14, 10: 60})
+    s.freeze_panes = s.cell(row=body_start, column=1).coordinate
 
 
 # ─── Sheet 3: Data lineage ───────────────────────────────────────────────────
@@ -458,27 +490,33 @@ def sheet_strategies(wb: Workbook) -> None:
         squads = []
     squad_by_id = {sq.get("model_id") or sq.get("strategy_id"): sq for sq in squads}
 
-    MIDS = ["m1_banker", "m2_form_hunter", "m3_stat_max"]
+    MIDS = ["m1_banker", "m2_form_hunter", "m3_stat_max", "m4_sb_hunter"]
 
-    headers = ["Attribute", "M1 — Banker", "M2 — Form Hunter", "M3 — Stat Maximizer"]
+    headers = ["Attribute", "M1 — Banker", "M2 — Form Hunter", "M3 — Stat Maximizer", "M4 — SB Hunter"]
     rows = [
         ["Intent",
          "Floor-heavy. Consistency, average points, SB track record. Premium picks on favored fixtures. Cleanest top-decile path on average rounds.",
          "Recency-weighted. Recent goals, started-pct, fotmob rating, last-round explosions. Punishes cold streaks even on strong fixtures.",
-         "Pure FIFA-stats. Powerrank + position-routed per-90 + creativity + duels. Ignores ownership entirely — picks best player regardless of crowd."],
-        ["Bracket weight w_B1 (PlayerOverall)", 0.20, 0.10, 0.15],
-        ["Bracket weight w_B2 (WC Perf)",      0.25, 0.20, 0.50],
-        ["Bracket weight w_B3 (External)",     0.20, 0.40, 0.25],
-        ["Bracket weight w_B4 (Fantasy meta)", 0.35, 0.30, 0.10],
+         "Pure FIFA-stats. Powerrank + position-routed per-90 + creativity + duels. Ignores ownership entirely — picks best player regardless of crowd.",
+         "Differential / SB-eligibility chaser. Custom assembler — anchors 3 fixed roles (2 'sure_shot_fwd' + 1 'influential_mid') then maximises sub-5% ownership across the remaining 12. High variance, high upside."],
+        ["Bracket weight w_B1 (PlayerOverall)", 0.20, 0.10, 0.15, 0.15],
+        ["Bracket weight w_B2 (WC Perf)",      0.25, 0.20, 0.50, 0.25],
+        ["Bracket weight w_B3 (External)",     0.20, 0.40, 0.25, 0.20],
+        ["Bracket weight w_B4 (Fantasy meta)", 0.35, 0.30, 0.10, 0.40],
         ["Post-boost sub-scores", "(none — bracket-only)",
          "recent_form_streak (recent5/10 goals, POM, started_pct, last_round_pts)",
-         "creativity_engine (chances_created, big_chances, touches_opp_box, ball-progressions) + powerrank_pure (atk/def/cre/gk)"],
-        ["Fixture amplifier (B5 weight)", 1.00, 0.85, 1.00],
-        ["SB-quota (target, ±1)", "9 of 15", "6 of 15", "3 of 15"],
-        ["Captain rule", "argmax(ev_model × 2 + Σ ev_others over XI)", "same", "same"],
-        ["Budget mode", "Both (budget + unbudgeted)", "Both", "Both"],
+         "creativity_engine (chances_created, big_chances, touches_opp_box, ball-progressions) + powerrank_pure (atk/def/cre/gk)",
+         "sb_track_bonus (sb_total ≥1 multiplier, sigmoid gate at 5% ownership, differential_kicker for <2%)"],
+        ["Fixture amplifier (B5 weight)", 1.00, 0.85, 1.00, 0.90],
+        ["SB-quota (target, ±1)", "9 of 15", "6 of 15", "3 of 15", "12 of 15"],
+        ["Assembler",
+         "generic (ev_model sort + SB-quota cap + ≤3/nation + £100m)",
+         "generic", "generic",
+         "assemble_sb_hunter_squad — anchors 2× sure_shot_fwd + 1× influential_mid by ev_model, fills rest from sub-5% pool"],
+        ["Captain rule", "argmax(ev_model × 2 + Σ ev_others over XI)", "same", "same", "same"],
+        ["Budget mode", "Both (budget + unbudgeted)", "Both", "Both", "Both"],
         ["Tracking", "Each model runs as its own Challenge — round-by-round actuals tracked against fantasy_player_round_stats. Transfer rules per FIFA Fantasy spec: 2 free MD2/MD3, unlimited R32, 4 R16/QF, 5 SF, 6 Final, -3 per extra.",
-         "same", "same"],
+         "same", "same", "same"],
     ]
     for j, h in enumerate(headers, start=1):
         s.cell(row=4, column=j, value=h)
@@ -521,7 +559,7 @@ def sheet_strategies(wb: Workbook) -> None:
         t = sq.get("twelfth_man")
         s.cell(row=next_r, column=col, value=f"{t['known_name']} ({t['nation_id']}) £{t['price']}" if t else "—")
     style_body(s, 5 + len(rows) + 1, next_r, len(headers))
-    set_widths(s, {1: 32, 2: 40, 3: 40, 4: 40})
+    set_widths(s, {1: 32, 2: 38, 3: 38, 4: 38, 5: 38})
 
     # Squad embedding
     section_r = next_r + 2
@@ -714,6 +752,294 @@ def sheet_verification(wb: Workbook) -> None:
     set_widths(s, {1: 32, 2: 16, 3: 70})
 
 
+# ─── Sheet 9: Round Lock (determinism + freeze cadence) ────────────────────
+
+
+def sheet_round_lock(wb: Workbook) -> None:
+    s = wb.create_sheet("Round Lock")
+    add_title(s, "Round-lock snapshot — deterministic re-runs",
+              "Freezes every stat input at post-R(target-1) state. Re-runs for the same target round are byte-stable except for live %selected.")
+
+    s["A4"] = "MECHANIC"
+    s["A4"].font = H2
+    mechanic = [
+        ["#", "Step", "Detail"],
+        [1, "Determine target round",
+         "pick_target_round() reads LIVE fantasy_rounds.parquet. Picks the round in [start_date, end_date] (active by date), then next scheduled WITH fixtures, then last completed. R32 (R4) only goes live once fantasy_round_matches.parquet has 24 R4 entries — i.e. once the group stage finishes and the bracket fixtures lock."],
+        [2, "Compute lock_round",
+         "lock_round = max(0, target - 1). For target=R3 → lock=R2; for target=R4 (R32) → lock=R3; etc. Stats up to AND INCLUDING lock_round are used; everything beyond is filtered out."],
+        [3, "Validate / create",
+         "Snapshot dir: data/processed/locked/post_round_{lock_round:02d}/. If it exists AND has every parquet lib/recommender.py reads → reuse. If anything's missing (e.g. a new lib dependency landed) → wipe + re-create. Env RELOCK=1 forces a re-create."],
+        [4, "Bulk-copy",
+         "Every *.parquet from live PROC → lock_dir. Defensive default so new warehouse parquets don't break the next CI run."],
+        [5, "Filter per-round source",
+         "fantasy_player_round_stats.parquet → keep rows with round_id ≤ lock_round."],
+        [6, "Filter per-match sources",
+         "wc26_player_match_stats_wide.parquet, wc26_player_match_powerrank.parquet, wc26_stg_team_match_metrics.parquet — keep rows whose match_number is in the round_id ≤ lock_round window (mapped via fantasy_round_matches → squads → stg_matches)."],
+        [7, "Rebuild aggregates from filtered sources",
+         "wc26_stg_fantasy_player_totals (appearances / scouting_bonus / total_points / …), wc26_stg_player_powerrank (avg attacking/defensive/creativity/defending_goal_score), wc26_stg_players_view (all 55 fifa_wc_* SUM/AVG/MAX cols + fotmob_wc_appearances override using fifa_wc_n_matches with TimePlayed>0 filter — fixes the bench-row inflation bug)."],
+        [8, "Rebind PROC",
+         "lib.recommender.PROC = lock_dir for the scoring + archetype + fixture-profile + squad-assembly calls. Restored to live PROC before history-write so artefacts land in data/processed/ as usual."],
+        [9, "Manifest",
+         "_lock_manifest.json stamps target_round, lock_round, created_utc, locked_match_count, and which parquets were filtered vs rebuilt. Inspect this to debug stale locks."],
+    ]
+    for i, row in enumerate(mechanic, start=5):
+        for j, v in enumerate(row, start=1):
+            s.cell(row=i, column=j, value=v)
+    style_header_row(s, 5, 3)
+    style_body(s, 6, 5 + len(mechanic) - 1, 3)
+    set_widths(s, {1: 5, 2: 28, 3: 90})
+
+    # Current lock state from manifest if available
+    next_r = 5 + len(mechanic) + 2
+    s.cell(row=next_r, column=1, value="CURRENT LOCK STATE").font = H2
+    next_r += 1
+    manifest_path = PROC / "locked"
+    if manifest_path.exists():
+        locks = sorted(manifest_path.glob("post_round_*/_lock_manifest.json"))
+        if locks:
+            for mf_path in locks:
+                try:
+                    mf = json.loads(mf_path.read_text())
+                except Exception:
+                    continue
+                s.cell(row=next_r, column=1, value=mf_path.parent.name)
+                s.cell(row=next_r, column=2, value=f"target=R{mf.get('target_round')} lock=R{mf.get('lock_round')}")
+                s.cell(row=next_r, column=3,
+                       value=f"created {mf.get('created_utc','?')[:19]}Z · {mf.get('locked_match_count','?')} matches · {mf.get('total_parquets_in_lock','?')} parquets")
+                next_r += 1
+        else:
+            s.cell(row=next_r, column=1, value="(no _lock_manifest.json found — first cron tick will create one)")
+            next_r += 1
+    else:
+        s.cell(row=next_r, column=1, value="(locked/ directory not present — will be created on first run)")
+        next_r += 1
+    style_body(s, 5 + len(mechanic) + 2, next_r - 1, 3)
+
+    # Confirmation table — answers the typical "is R3 really R2-only" question
+    next_r += 1
+    s.cell(row=next_r, column=1, value="DETERMINISM AUDIT").font = H2
+    next_r += 1
+    audit = [
+        ["Question", "Answer"],
+        ["R3 suggestions only use up-to-R2 stats?",
+         "YES. fantasy_player_round_stats filtered to round_id ≤ 2; wide stats filtered to match_number ≤ 48; stg_fantasy_player_totals + stg_player_powerrank + stg_players_view fifa_wc_* rebuilt from those filtered sources. Cumulative tournament aggregates can no longer leak partial R3 data."],
+        ["R32 (R4) will pick up MD3 stats automatically?",
+         "YES. Once fantasy_round_matches has R4 fixtures (which lands when the group stage finishes), pick_target_round() flips to R4 and a fresh lock dir post_round_03/ is created including all R3 stats. No manual trigger."],
+        ["Will re-runs of R3 change suggestions?",
+         "NO for stats — locked. Only live %selected (refresh_live_percent_selected) shifts between runs, which intentionally moves the differential / SB-eligibility math by tiny amounts."],
+        ["What about FotMob-only WC stats not in fifa_wc_*?",
+         "CLOSED. Two-track rebuild inside the lock: (1) RECOVERABLE counters (goals, assists, minutes_played, yellows, reds, fotmob_rating) re-aggregated from wc26_player_recent_matches_fotmob filtered to WC2026 matches with match_date_utc ≤ lock window end. (2) NON-RECOVERABLE counters (chances_created, big_chances_created, dribbles, duels_won, touches, touches_opp_box, defensive_contributions, tackles, fouls_committed, xg_against_on_pitch) scaled by (lock_apps / live_apps) per player — assumes uniform per-match production, which is the standard unbiased estimator. Rates (duels_won_pct, successful_dribbles_pct) kept as-is — distribution-invariant under uniformity. All 6 fotmob_wc_* cols actually consumed by lib/recommender.py are now genuinely round-bounded."],
+        ["Is the live %selected leak an issue for determinism?",
+         "Intentional. The SB-eligibility gate uses live ownership so picks reflect current market. Stats are frozen; ownership floats."],
+    ]
+    for i, row in enumerate(audit):
+        s.cell(row=next_r, column=1, value=row[0])
+        s.cell(row=next_r, column=2, value=row[1])
+        if i == 0:
+            style_header_row(s, next_r, 2)
+        next_r += 1
+    style_body(s, next_r - len(audit) + 1, next_r - 1, 2)
+
+
+# ─── Sheet 10: Archetypes (clusters from mine_archetypes_v2) ───────────────
+
+
+def sheet_archetypes(wb: Workbook) -> None:
+    s = wb.create_sheet("Archetypes")
+    add_title(s, "Player archetype clusters",
+              "K-means clustering in FIFA-stat + scoring-channel feature space. "
+              "Two passes: retrospective (MD1+MD2 top-20% scorers) and prospective (full 1488 pool). "
+              "Best-k chosen by silhouette across {6, 8, 10, 12}.")
+
+    # Algorithm summary
+    s["A4"] = "ALGORITHM"
+    s["A4"].font = H2
+    algo = [
+        ["Step", "Detail"],
+        ["Feature build",
+         "Per-player aggregate from wc26_player_match_stats_wide (locked). p90 cols: AttemptAtGoal, AttemptAtGoalOnTarget, XG, Assists, Crosses, CrossesCompleted, PassesCompleted, Tackles, DefensivePressuresApplied, ForcedTurnovers, Corners, TotalDistance, GoalkeeperSaves. Plus wc_rating, FDH powerrank (attacking/defensive/creativity), price, %selected, scoring-channel composition (pts_from_goals/assists/cs/saves/sb/bonus pct)."],
+        ["Drop nulls",
+         "Any feature column with >40% null is dropped (avoids over-imputation in early-tournament samples). Remaining nulls filled with column median."],
+        ["Scale + cluster",
+         "StandardScaler + KMeans (n_init=10, random_state=42) at k ∈ {6,8,10,12}. Pick k with highest silhouette_score(Xs, labels)."],
+        ["Name each cluster",
+         "{TIER}_{POSITION}_{TOP_CHANNEL}_{TOP_STAT}_{OWN_BAND}. "
+         "Tier from mean price (ELITE ≥9, MID_TIER ≥6, else BUDGET). "
+         "Position = modal position. "
+         "Top channel from scoring-channel composition (pts_from_goals / assists / cs / saves / sb / bonus). "
+         "Top stat from highest mean p90 feature. "
+         "Own band: DIFF if median %sel < 5 else POPULAR."],
+        ["Exemplars",
+         "Top-3 players per cluster by total fantasy points so far (or 0 if no R≤lock data yet)."],
+        ["Attached to scoring frame",
+         "attach_archetypes(scored, retro, prospective) writes peer_archetype_retrospective + peer_archetype_prospective + similarity + top-3 examples onto every recommendation row. PWA reads these as reason chips."],
+    ]
+    for i, row in enumerate(algo, start=5):
+        for j, v in enumerate(row, start=1):
+            s.cell(row=i, column=j, value=v)
+    style_header_row(s, 5, 2)
+    style_body(s, 6, 5 + len(algo) - 1, 2)
+    set_widths(s, {1: 22, 2: 95})
+
+    next_r = 5 + len(algo) + 2
+
+    # Live cluster definitions
+    for kind, fname in (("Retrospective (MD1+MD2 top-20%)", "archetypes_retrospective_v2.json"),
+                        ("Prospective (full pool, pre-tournament profile)", "archetypes_prospective_v2.json")):
+        s.cell(row=next_r, column=1, value=kind.upper()).font = H2
+        next_r += 1
+        eda_path = ROOT / "data" / "eda" / fname
+        if not eda_path.exists():
+            s.cell(row=next_r, column=1, value=f"(file {fname} not yet emitted — run 17_fantasy_recommender.py)")
+            next_r += 2
+            continue
+        try:
+            data = json.loads(eda_path.read_text())
+        except Exception as e:
+            s.cell(row=next_r, column=1, value=f"(failed to parse {fname}: {e})")
+            next_r += 2
+            continue
+        meta_line = (f"k={data.get('k')} · silhouette={data.get('silhouette', 0):.3f} · "
+                     f"{len(data.get('archetypes', []))} clusters · "
+                     f"{len(data.get('feature_cols', []))} features")
+        s.cell(row=next_r, column=1, value=meta_line).font = BODY_BOLD
+        next_r += 1
+        # Cluster table
+        hdr = ["Cluster", "Name", "N", "Mean pts", "Top exemplars"]
+        for j, h in enumerate(hdr, start=1):
+            s.cell(row=next_r, column=j, value=h)
+        style_header_row(s, next_r, len(hdr))
+        first = next_r + 1
+        next_r += 1
+        for a in data.get("archetypes", []):
+            s.cell(row=next_r, column=1, value=a.get("cluster_id"))
+            s.cell(row=next_r, column=2, value=a.get("name"))
+            s.cell(row=next_r, column=3, value=a.get("n"))
+            s.cell(row=next_r, column=4, value=round(a.get("mean_pts", 0), 1))
+            ex = a.get("exemplars") or []
+            ex_txt = " · ".join(
+                f"{e.get('known_name','?')} ({e.get('nation_id','')}) {int(e.get('total_pts',0))}pts"
+                for e in ex
+            )
+            s.cell(row=next_r, column=5, value=ex_txt or "(no exemplars yet)")
+            next_r += 1
+        style_body(s, first, next_r - 1, 5)
+        next_r += 1
+    set_widths(s, {1: 10, 2: 38, 3: 6, 4: 10, 5: 80})
+
+
+# ─── Sheet 11: Decision Flow (end-to-end ensemble pipeline) ────────────────
+
+
+def sheet_decision_flow(wb: Workbook) -> None:
+    s = wb.create_sheet("Decision Flow")
+    add_title(s, "Decision flow — inputs → factors → brackets → models → joint → outputs",
+              "What gets read from where, what gets computed, how the 4 models combine into PWA outputs.")
+
+    s["A4"] = "INPUTS (under round lock)"
+    s["A4"].font = H2
+    inputs = [
+        ["Group", "Parquet (in lock_dir)", "Used for"],
+        ["Per-round fantasy", "fantasy_player_round_stats.parquet (filtered)",
+         "Source of cumulative fantasy totals (rebuilt into stg_fantasy_player_totals). Drives B4 FantasyMeta — form, avg_pts, total_pts, consistency, last_round_points, scouting_bonus, sb_track multiplier."],
+        ["Per-match FIFA", "wc26_player_match_stats_wide.parquet (filtered)",
+         "53 spec'd FIFA stats per (player, match) — Goals, Assists, AttemptAtGoal(OnTarget), XG, Tackles, GoalkeeperSaves, CleanSheets, Passes(Completed), BallProgressions, SwitchesOfPlay, ChancesCreated, TouchesOppBox, DefensivePressures, etc. Rebuilt into stg_players_view.fifa_wc_* cols (SUM/AVG/MAX). Drives B2 WCPerfRating (per-90 + Bayesian shrinkage, position-routed)."],
+        ["Per-match FDH powerrank", "wc26_player_match_powerrank.parquet (filtered)",
+         "Attacking / defensive / creativity / defending_the_goal scores per (player, match). Rebuilt into stg_player_powerrank avg_*. Feeds B2 (30% weight) for position-conditional power-rank percentile."],
+        ["Identity + profile", "fantasy_players.parquet, wc26_stg_players_view.parquet (career/value/recent-form cols preserved live)",
+         "Position, price, %selected, known_name, fifa_player_id↔fantasy_player_id mapping. Career rollups (club_senior_*, national_senior_*), market value (latest/peak), FotMob recent5/10/15 windows. Drives B1 PlayerOverall + B3 ExternalRatings."],
+        ["FotMob WC tournament rollup", "wc26_stg_players_view.fotmob_wc_* (live snapshot, partial leak)",
+         "FotMob's tournament-stats endpoint — chances_created, big_chances, dribbles, duels_won, touches_opp_box, defensive_contributions, xg_against_on_pitch. Feeds B2 (FotMob branch). NOT round-filterable — see Round Lock sheet audit."],
+        ["Fixtures + schedule", "fantasy_round_matches.parquet, wc26_stg_matches.parquet (as-is)",
+         "Round 24-match window, home/away nation_id, kickoff_utc, stage, venue. Drives fixture cross-join in scoring."],
+        ["Markets", "wc26_match_polymarket_markets.parquet, wc26_polymarket_match_volume.parquet (as-is)",
+         "Per-fixture Polymarket implied probabilities: moneyline (p_home_win/p_away_win/p_draw), over/under totals (0.5-9.5), BTTS, per-side scoring. Feeds goals_index + cs_index + p_btts in fixture profile."],
+        ["Trends + weather", "wc26_match_trends_365.parquet, wc26_match_weather.parquet (as-is)",
+         "Scores365 historic-trend rankings per fixture; weather cluster + temperature + humidity + roof_type + surface. Feeds B5 FixtureMultiplier modifiers (weather_drag, trend_top_confidence)."],
+        ["Nations identity", "wc26_stg_nations.parquet, fantasy_squads.parquet (as-is)",
+         "Confederation, FIFA rank, pot, squad valuation. Drives nation_strength_composite in B1."],
+        ["Team match metrics", "wc26_stg_team_match_metrics.parquet (filtered)",
+         "Per-team WC2026 match metrics. Used by team-strength derivations."],
+        ["Live %selected (NOT locked)", "refresh_live_percent_selected() — vercel /api/fifa-fantasy edge proxy",
+         "Tick-fresh ownership for every fantasy_player_id. Overrides snapshot %selected before scoring. Drives differential / SB-eligibility math. Intentionally floats between re-runs of the same lock."],
+    ]
+    for i, row in enumerate(inputs, start=5):
+        for j, v in enumerate(row, start=1):
+            s.cell(row=i, column=j, value=v)
+    style_header_row(s, 5, 3)
+    style_body(s, 6, 5 + len(inputs) - 1, 3)
+    set_widths(s, {1: 26, 2: 42, 3: 78})
+
+    next_r = 5 + len(inputs) + 2
+    s.cell(row=next_r, column=1, value="ENSEMBLE FLOW").font = H2
+    next_r += 1
+    pipeline = [
+        ["Step", "Function", "Output"],
+        ["1. Archetype mining (shared)",
+         "mine_archetypes_v2('retrospective') + mine_archetypes_v2('prospective')",
+         "data/eda/archetypes_*_v2.json — cluster definitions + player_clusters map. Both runs read the LOCKED parquets."],
+        ["2. Fixture profile (per round)",
+         "assemble_fixture_profile(target_round)",
+         "24 fixture rows: goals_index, cs_index_home/away, p_home_win/away_win/draw, p_btts, nation_strength_delta, fixture_shape ∈ {consensus_lopsided, consensus_tight, market_overconfident, composite_overconfident}, weather_cluster, trend_top_*."],
+        ["3a. Score under each of 4 models",
+         "score_for_model(target, fx, model_id) → score_players_brackets() under that model's weights",
+         "Per-player rows with b1_overall, b2_wc_perf, b3_external, b4_fantasy, b5_fixture_mult, bracket_sum, ev_bracket, ev_model (post-boosts applied for M2/M3/M4)."],
+        ["3b. Filters + anti-pick tag",
+         "apply_filters() then tag_anti_picks()",
+         "Drops is_active=False + injured. Tags 2nd/3rd ranked players on the opponent side of consensus_tight fixtures as anti_picks (D-3)."],
+        ["3c. Reason chips",
+         "tag_chips()",
+         "HEDGE / DIFFERENTIAL / SB_TRACK_xN / SB_LIKELY / CEILING_HOT / FAVORED_FIXTURE / TREND_<CAT>."],
+        ["3d. Attach archetypes",
+         "attach_archetypes(scored, retro, prospective)",
+         "archetype_retrospective + sim + 3 examples; archetype_prospective + sim + 3 examples."],
+        ["4. Joint output",
+         "build_joint_picks(model_outputs, top_n=30)",
+         "consensus (in ≥2 models' top-30, sorted by max_ev), surprises (in exactly 1 model's top-30), per_position_top (15 FWD / 15 MID / 15 DEF / 5 GK by max ev_model across ALL models — pulls from FULL scored frame, not the top-30 union)."],
+        ["5. Per-model squads",
+         "assemble_strategy_squad (M1/M2/M3) or assemble_sb_hunter_squad (M4)",
+         "One challenge squad per model: 2/5/5/3 quota, ≤3/nation, £100m budget, captain + vice + 12th-man. Also emits an unbudgeted variant for reference."],
+        ["6. Position suggestor (legacy)",
+         "build_position_suggestor(banker)",
+         "wc26_fantasy_position_suggestor.json — kept for back-compat."],
+        ["7. Round tracking",
+         "build_round_tracking(squads_by_round)",
+         "Closed-round actuals joined against fantasy_player_round_stats; running totals per model. Auto-pulls prior round snapshots from data/processed/history/round_NN/."],
+        ["8. PWA emit",
+         "_emit_pwa_json.py (downstream) + parquet→json mirroring inside 17",
+         "Writes data/processed/json/*.json which the PWA fetches at /data/."],
+    ]
+    for i, row in enumerate(pipeline, start=next_r):
+        for j, v in enumerate(row, start=1):
+            s.cell(row=i, column=j, value=v)
+    style_header_row(s, next_r, 3)
+    style_body(s, next_r + 1, next_r + len(pipeline) - 1, 3)
+    next_r += len(pipeline) + 1
+
+    next_r += 1
+    s.cell(row=next_r, column=1, value="PWA RENDERING (consumer side)").font = H2
+    next_r += 1
+    pwa = [
+        ["Section", "Detail"],
+        ["Suggested Picks → By Position",
+         "joint.per_position_top — 15 FWD / 15 MID / 15 DEF / 5 GK. Position chip filters to one position."],
+        ["Suggested Picks → High Confidence",
+         "joint.consensus — players in ≥2 model top-30 lists. Tile shows model attribution chips (M1/M2/M3/M4 short labels, no EV numbers — feedback removed the per-model EV)."],
+        ["Suggested Picks → Per-Model Surprises",
+         "joint.surprises grouped by model_id. Tile design same as consensus."],
+        ["Suggested Picks → SB Eligible",
+         "Deduped pool from joint.per_position_top + filter to live %sel < 5%. Honours position chips."],
+        ["Fantasy Challenge",
+         "4 strategy_squads (one per model). Tap to drill in: FIFA-style round-picker tabs across the top, total pts huge, captain marked, per-tile live/finished badge."],
+    ]
+    for i, row in enumerate(pwa, start=next_r):
+        for j, v in enumerate(row, start=1):
+            s.cell(row=i, column=j, value=v)
+    style_header_row(s, next_r, 2)
+    style_body(s, next_r + 1, next_r + len(pwa) - 1, 2)
+
+
 def main():
     wb = Workbook()
     sheet_overview(wb)
@@ -724,6 +1050,9 @@ def main():
     sheet_chips(wb)
     sheet_anomalies(wb)
     sheet_verification(wb)
+    sheet_round_lock(wb)
+    sheet_archetypes(wb)
+    sheet_decision_flow(wb)
     wb.save(OUT)
     print(f"wrote {OUT}")
 
