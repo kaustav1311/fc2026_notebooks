@@ -102,7 +102,7 @@ python -m notebook_runner 06 04 --force-refresh
 | `wc26_stg_player_powerrank` | derived from `wc26_player_match_powerrank` (groupby on (fifa_player_id, fifa_team_id), mean of scores, no joins) | rebuilds with parent |
 | `ref_id_bridge` | derived inside `04_referees` (numeric `fifa_referee_id` → slug `referee_id` by surname+iso3 + override CSV) | rebuilds with `04` daily; cheap |
 
-Notebooks: `03`, `05`, `07`, **`08`** (player enrichment — promoted 2026-06-24), `09`, `10`, `11`, `12`, `13`, **`14`** (staging core), **`15`** (staging matches), **`16`** (staging players). Order matters: `08` must follow `07` so `wc26_player_match_stats_wide` is fresh when nb_08 derives `EVENT_PIDS`.
+Notebooks: `03`, `05`, `07`, **`08`** (player enrichment — promoted 2026-06-24), `09`, `10`, `11`, `12`, `13`, **`14`** (staging core), **`15`** (staging matches), **`16`** (staging players), **`17_fantasy_recommender.py`** (4-model recommender — see [RECOMMENDER.md](RECOMMENDER.md)), **`18_scores365_trends.ipynb`** (365scores trend snapshots feeding A12). Order matters: `08` must follow `07` so `wc26_player_match_stats_wide` is fresh when nb_08 derives `EVENT_PIDS`. `17` must follow `16` so the staging tables it scores against are fresh; `17` also calls `refresh_live_percent_selected()` at its top so SB-quota math sees the same ownership the PWA renders.
 
 ### ⏱ Event-triggered — fire on a specific moment
 
