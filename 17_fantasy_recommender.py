@@ -76,22 +76,14 @@ LOCK_FILTERED_PER_ROUND = "fantasy_player_round_stats.parquet"
 LOCK_FILTERED_PER_MATCH = [
     "wc26_player_match_stats_wide.parquet",
     "wc26_player_match_powerrank.parquet",
+    "wc26_stg_team_match_metrics.parquet",
 ]
 
-# Parquets that are NOT round-dependent (identity, schedule, markets, squad
-# rosters, fantasy_rounds for status) — copied as-is. `fantasy_rounds.parquet`
-# also lives at LIVE PROC for pick_target_round; the locked copy is a backup
-# for any downstream caller that uses the rebound PROC.
-LOCK_COPIED_AS_IS = [
-    "fantasy_round_matches.parquet",
-    "fantasy_players.parquet",
-    "fantasy_squads.parquet",
-    "wc26_stg_matches.parquet",
-    "wc26_match_polymarket_markets.parquet",
-    "wc26_match_weather.parquet",
-    "wc26_match_trends.parquet",
-    "fantasy_rounds.parquet",
-]
+# Defensive default: bulk-copy EVERY .parquet from PROC into the lock first,
+# then overwrite filtered/rebuilt ones below. Beats whitelisting because the
+# warehouse pipeline keeps adding parquets (volume, trends_365, nations,
+# team_metrics, …) — without the bulk pass, a new dependency means another
+# FileNotFoundError on next CI run.
 
 
 # ── FIFA wide → fifa_wc_* aggregation spec (mirrors _build_nb_16.py Block B)
@@ -273,13 +265,14 @@ def prepare_locked_snapshot(target_round: int, *, force_relock: bool = False) ->
     print(f"[17]   lock window: {len(allowed_match_numbers)} matches "
           f"(round_id <= {lock_round})")
 
-    # Step 1 — copy non-round-dependent tables as-is
-    for fname in LOCK_COPIED_AS_IS:
-        src = PROC / fname
-        if not src.exists():
-            print(f"[17]   skip {fname} (missing)")
-            continue
-        shutil.copy2(src, lock_dir / fname)
+    # Step 1 — bulk-copy every parquet from PROC. Filtered + rebuilt files
+    # below will overwrite their respective copies. This makes the lock dir
+    # self-sufficient even when new parquets get added to the warehouse.
+    bulk_copied = 0
+    for src in PROC.glob("*.parquet"):
+        shutil.copy2(src, lock_dir / src.name)
+        bulk_copied += 1
+    print(f"[17]   bulk-copied {bulk_copied} parquets from live PROC")
 
     # Step 2a — filter per-round fantasy stats
     src_prs = PROC / LOCK_FILTERED_PER_ROUND
@@ -341,7 +334,7 @@ def prepare_locked_snapshot(target_round: int, *, force_relock: bool = False) ->
         "locked_match_count": len(allowed_match_numbers),
         "locked_match_numbers_sample": sorted(allowed_match_numbers)[:10] + ["..."]
             if len(allowed_match_numbers) > 10 else sorted(allowed_match_numbers),
-        "copied_as_is": [f for f in LOCK_COPIED_AS_IS if (lock_dir / f).exists()],
+        "total_parquets_in_lock": sum(1 for _ in lock_dir.glob("*.parquet")),
         "filtered_per_round": [LOCK_FILTERED_PER_ROUND] if dst_prs.exists() else [],
         "filtered_per_match": [f for f in LOCK_FILTERED_PER_MATCH if (lock_dir / f).exists()],
         "rebuilt_aggregates": [f for f in LOCK_REBUILT_FILES if (lock_dir / f).exists()],
