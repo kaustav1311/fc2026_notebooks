@@ -231,6 +231,21 @@ def _rebuild_stg_players_view_fifa_wc(src_wide: Path, live_view_src: Path, dst: 
           f"{len(fifa_wc_cols)} fifa_wc_* cols re-aggregated")
 
 
+def _lib_required_parquets() -> list[str]:
+    """Scrape every `PROC / "<name>.parquet"` literal from lib/recommender.py.
+    Used to validate an existing lock dir before reuse — if the lib has grown
+    a new dependency since the lock was first created, we'll detect the gap
+    and recreate. Returns an empty list if the scan fails (treat as no-check).
+    """
+    try:
+        import re
+        text = (ROOT / "lib" / "recommender.py").read_text(encoding="utf-8")
+        return sorted(set(re.findall(r'PROC\s*/\s*"([^"]+\.parquet)"', text)))
+    except Exception as exc:
+        print(f"[17]   warn: lib parquet scan failed ({exc}); skipping lock validation")
+        return []
+
+
 def prepare_locked_snapshot(target_round: int, *, force_relock: bool = False) -> Path:
     """Materialise / reuse the post-Round-(target-1) snapshot directory.
 
@@ -251,9 +266,21 @@ def prepare_locked_snapshot(target_round: int, *, force_relock: bool = False) ->
     lock_round = max(0, target_round - 1)
     lock_dir = LOCKED_ROOT / f"post_round_{lock_round:02d}"
     if lock_dir.exists() and not force_relock:
-        print(f"[17] reusing locked snapshot: {lock_dir.relative_to(ROOT)}")
-        return lock_dir
-    if lock_dir.exists():
+        # Self-heal: an older lock created before the bulk-copy fix may be
+        # missing parquets the lib now needs (e.g. wc26_polymarket_match_volume
+        # added late). Validate that every parquet referenced by
+        # lib/recommender.py is present; re-create the snapshot otherwise so
+        # one bad initial run doesn't break every future cron tick.
+        required = _lib_required_parquets()
+        missing = [p for p in required if not (lock_dir / p).exists()]
+        if not missing:
+            print(f"[17] reusing locked snapshot: {lock_dir.relative_to(ROOT)}")
+            return lock_dir
+        print(f"[17] stale lock at {lock_dir.relative_to(ROOT)} — "
+              f"missing {len(missing)} parquet(s): {missing[:3]}{'…' if len(missing) > 3 else ''}")
+        print(f"[17] re-creating snapshot")
+        shutil.rmtree(lock_dir)
+    elif lock_dir.exists():
         print(f"[17] force-relock: wiping {lock_dir.relative_to(ROOT)}")
         shutil.rmtree(lock_dir)
     print(f"[17] creating locked snapshot at {lock_dir.relative_to(ROOT)} "
