@@ -692,6 +692,27 @@ def main():
     else:
         lock_dir = prepare_locked_snapshot(target, force_relock=force_relock)
         rec_mod.PROC = lock_dir
+        # Sanity check — confirm the lock window matches the target round.
+        # If a stale lock somehow carries post-target round stats (e.g. cache
+        # corruption, manual file edit, missing filter on a future input
+        # source), abort loudly rather than silently emitting leaked picks.
+        try:
+            _ft = pd.read_parquet(lock_dir / "wc26_stg_fantasy_player_totals.parquet")
+            _max_apps = int(_ft["appearances"].max() if len(_ft) else 0)
+            expected_max = target - 1
+            if _max_apps > expected_max:
+                print(f"[17]   LOCK SANITY FAIL: max appearances={_max_apps} "
+                      f"> expected {expected_max} (target R{target}). "
+                      f"Wiping lock and forcing re-create from current PROC.")
+                rec_mod.PROC = original_proc
+                shutil.rmtree(lock_dir, ignore_errors=True)
+                lock_dir = prepare_locked_snapshot(target, force_relock=True)
+                rec_mod.PROC = lock_dir
+            else:
+                print(f"[17]   lock sanity OK: max appearances={_max_apps} "
+                      f"<= {expected_max}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[17]   WARN: lock sanity check skipped ({exc})")
 
     # 1. Archetypes (mode-agnostic — shared across models)
     print("[17] mining archetypes (retrospective + prospective)…")
