@@ -63,6 +63,13 @@ EDA_DIR = ROOT / "data" / "eda"
 # ownership.
 LOCKED_ROOT = PROC / "locked"
 
+# Bump whenever the lock-build semantics change (rebuilds, filters, schema).
+# A reused lock with a stale schema version is force-rebuilt — protects
+# against actions/cache restoring a poisoned lock from an older code revision
+# (this is exactly what put R3-contaminated picks back on the PWA every cron
+# tick despite a clean code path: the cache kept reviving a pre-fix lock).
+LOCK_SCHEMA_VERSION = 3
+
 # Cumulative / aggregate parquets we REBUILD from per-match sources inside
 # the lock. Listed here for documentation; we don't copy them.
 LOCK_REBUILT_FILES = [
@@ -418,18 +425,57 @@ def prepare_locked_snapshot(target_round: int, *, force_relock: bool = False) ->
     lock_round = max(0, target_round - 1)
     lock_dir = LOCKED_ROOT / f"post_round_{lock_round:02d}"
     if lock_dir.exists() and not force_relock:
-        # Self-heal: an older lock created before the bulk-copy fix may be
-        # missing parquets the lib now needs (e.g. wc26_polymarket_match_volume
-        # added late). Validate that every parquet referenced by
-        # lib/recommender.py is present; re-create the snapshot otherwise so
-        # one bad initial run doesn't break every future cron tick.
+        # Three reuse validations — any failure forces a fresh rebuild:
+        #   1. Required parquets all present (lib may have grown deps)
+        #   2. Manifest schema_version matches current LOCK_SCHEMA_VERSION
+        #      (GHA actions/cache can revive a lock built by older code that
+        #      had different filter/rebuild semantics — was the actual cause
+        #      of every cron tick re-emitting R3-contaminated picks)
+        #   3. Content sanity — fifa_wc_TimePlayed.max() ≤ lock_round * 110
+        #      (≈ full match + stoppage). If a player has > lock_round * 110
+        #      minutes, the wide-stats filter didn't apply correctly and R3
+        #      minutes leaked into the cumulative aggregate.
+        reasons = []
         required = _lib_required_parquets()
         missing = [p for p in required if not (lock_dir / p).exists()]
-        if not missing:
-            print(f"[17] reusing locked snapshot: {lock_dir.relative_to(ROOT)}")
+        if missing:
+            reasons.append(f"missing {len(missing)} parquet(s) (e.g. {missing[:2]})")
+
+        manifest_path = lock_dir / "_lock_manifest.json"
+        manifest_version = None
+        if manifest_path.exists():
+            try:
+                manifest_version = int(json.loads(manifest_path.read_text()).get("schema_version", 0))
+            except Exception:
+                manifest_version = 0
+        else:
+            manifest_version = 0
+        if manifest_version != LOCK_SCHEMA_VERSION:
+            reasons.append(
+                f"schema v{manifest_version} != current v{LOCK_SCHEMA_VERSION}"
+            )
+
+        view_path = lock_dir / "wc26_stg_players_view.parquet"
+        if view_path.exists():
+            try:
+                _v = pd.read_parquet(view_path, columns=["fifa_wc_TimePlayed"])
+                _max_t = float(_v["fifa_wc_TimePlayed"].fillna(0).max())
+                _cap = lock_round * 110.0  # 90 + stoppage buffer
+                if _max_t > _cap:
+                    reasons.append(
+                        f"fifa_wc_TimePlayed.max={_max_t:.0f} > cap {_cap:.0f} "
+                        f"(R3 minutes leaked into lock view)"
+                    )
+            except Exception as exc:  # noqa: BLE001
+                reasons.append(f"content sanity skipped ({exc})")
+
+        if not reasons:
+            print(f"[17] reusing locked snapshot: {lock_dir.relative_to(ROOT)} "
+                  f"(schema v{LOCK_SCHEMA_VERSION})")
             return lock_dir
-        print(f"[17] stale lock at {lock_dir.relative_to(ROOT)} — "
-              f"missing {len(missing)} parquet(s): {missing[:3]}{'…' if len(missing) > 3 else ''}")
+        print(f"[17] stale lock at {lock_dir.relative_to(ROOT)}:")
+        for r in reasons:
+            print(f"[17]   - {r}")
         print(f"[17] re-creating snapshot")
         shutil.rmtree(lock_dir)
     elif lock_dir.exists():
@@ -535,6 +581,7 @@ def prepare_locked_snapshot(target_round: int, *, force_relock: bool = False) ->
 
     # Stamp a manifest for traceability + debugging
     (lock_dir / "_lock_manifest.json").write_text(json.dumps({
+        "schema_version": LOCK_SCHEMA_VERSION,
         "target_round": target_round,
         "lock_round": lock_round,
         "created_utc": datetime.now(timezone.utc).isoformat(),

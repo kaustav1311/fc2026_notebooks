@@ -1,7 +1,8 @@
 {
+  "schema_version": 3,
   "target_round": 3,
   "lock_round": 2,
-  "created_utc": "2026-06-25T18:17:32.638303+00:00",
+  "created_utc": "2026-06-26T11:28:37.820255+00:00",
   "locked_match_count": 48,
   "locked_match_numbers_sample": [
     1,
