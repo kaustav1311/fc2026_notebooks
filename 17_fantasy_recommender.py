@@ -68,7 +68,7 @@ LOCKED_ROOT = PROC / "locked"
 # against actions/cache restoring a poisoned lock from an older code revision
 # (this is exactly what put R3-contaminated picks back on the PWA every cron
 # tick despite a clean code path: the cache kept reviving a pre-fix lock).
-LOCK_SCHEMA_VERSION = 3
+LOCK_SCHEMA_VERSION = 4
 
 # Cumulative / aggregate parquets we REBUILD from per-match sources inside
 # the lock. Listed here for documentation; we don't copy them.
@@ -405,6 +405,23 @@ def _lib_required_parquets() -> list[str]:
         return []
 
 
+def load_locked_percent_selected(lock_dir: Path) -> dict[int, float]:
+    """Read the frozen-at-lock-creation %selected map from the lock dir.
+    Returns an empty dict if the file is missing or malformed — caller falls
+    back to the snapshot-baked pct in fantasy_players.parquet.
+    """
+    pct_path = lock_dir / "_locked_percent_selected.json"
+    if not pct_path.exists():
+        return {}
+    try:
+        payload = json.loads(pct_path.read_text())
+        raw = payload.get("percent_selected", {})
+        return {int(k): float(v) for k, v in raw.items()}
+    except Exception as exc:  # noqa: BLE001
+        print(f"[17]   warn: locked pct read failed ({exc}); using snapshot pct")
+        return {}
+
+
 def prepare_locked_snapshot(target_round: int, *, force_relock: bool = False) -> Path:
     """Materialise / reuse the post-Round-(target-1) snapshot directory.
 
@@ -578,6 +595,30 @@ def prepare_locked_snapshot(target_round: int, *, force_relock: bool = False) ->
                         lock_dir / "wc26_stg_players.parquet",
                         lock_end_utc,
                     )
+
+    # Freeze live %selected ONCE at lock-creation time. The sigmoid in
+    # b4's sb_boost (1 / (1 + exp((pct_sel - 5)/1))) is steep at the 5%
+    # gate — if we inject fresh ownership at every cron tick it cascades
+    # through b4 → bracket_sum_model → ev_model and shuffles both the
+    # squad XI and the suggestion lists. Squad/suggestion EVs must be
+    # frozen for the round; only the live captain refresh + the PWA's
+    # live ownership counter should see fresh ownership.
+    pct_path = lock_dir / "_locked_percent_selected.json"
+    try:
+        from lib.recommender import refresh_live_percent_selected as _rlps
+        frozen_pct = _rlps(force=True)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[17]   live %sel fetch failed at lock-build ({exc}); "
+              f"frozen map will be empty (scoring falls back to snapshot pct)")
+        frozen_pct = {}
+    pct_path.write_text(json.dumps({
+        "captured_utc": datetime.now(timezone.utc).isoformat(),
+        "schema_version": LOCK_SCHEMA_VERSION,
+        "n_players": len(frozen_pct),
+        "percent_selected": {str(k): float(v) for k, v in frozen_pct.items()},
+    }, indent=2))
+    print(f"[17]   froze live %selected: {len(frozen_pct)} players → "
+          f"{pct_path.name}")
 
     # Stamp a manifest for traceability + debugging
     (lock_dir / "_lock_manifest.json").write_text(json.dumps({
@@ -777,11 +818,34 @@ def main():
     print(f"[17]   retro k={retro.get('k')} sil={retro.get('silhouette',0):.3f}")
     print(f"[17]   prospective k={prospective.get('k')} sil={prospective.get('silhouette',0):.3f}")
 
-    # 1b. Refresh live %selected — bypasses the warehouse snapshot so the
-    # scoring's SB / differential math sees the same ownership the PWA does.
-    print("[17] fetching live FIFA Fantasy %selected…")
-    live_pct = refresh_live_percent_selected(force=True)
-    print(f"[17]   live %selected map: {len(live_pct)} players")
+    # 1b. %selected for SQUAD + SUGGESTION scoring is read from the lock dir
+    # (frozen at lock-creation time). Cron-to-cron live ownership drift moves
+    # players across b4's 5%-gate sb_boost sigmoid, which cascades into
+    # ev_model and reshuffles both layers — exactly what the lock is meant
+    # to prevent. The live captain refresh further below fetches its own
+    # fresh map; that's the only place ownership SHOULD rotate within a round.
+    if nolock:
+        print("[17] NOLOCK=1 — fetching live %selected for scoring (no freeze)")
+        scoring_pct = refresh_live_percent_selected(force=True)
+    else:
+        scoring_pct = load_locked_percent_selected(lock_dir)
+        if not scoring_pct:
+            # Self-heal: pre-v4 lock dirs don't carry the frozen file.
+            # Snapshot NOW into the existing lock and reuse henceforth so
+            # subsequent cron ticks see a stable map without a full relock.
+            print("[17] locked %sel map missing — snapshotting into existing lock now")
+            scoring_pct = refresh_live_percent_selected(force=True)
+            try:
+                (lock_dir / "_locked_percent_selected.json").write_text(json.dumps({
+                    "captured_utc": datetime.now(timezone.utc).isoformat(),
+                    "schema_version": LOCK_SCHEMA_VERSION,
+                    "n_players": len(scoring_pct),
+                    "percent_selected": {str(k): float(v) for k, v in scoring_pct.items()},
+                    "self_healed": True,
+                }, indent=2))
+            except Exception as exc:  # noqa: BLE001
+                print(f"[17]   warn: could not persist self-healed pct ({exc})")
+    print(f"[17]   scoring %selected map: {len(scoring_pct)} players (frozen)")
 
     # 2. Fixture profiles
     print("[17] assembling fixture profiles…")
@@ -792,7 +856,7 @@ def main():
     print(f"[17] scoring under {len(MODEL_REGISTRY)} models…")
     model_outputs: dict[str, pd.DataFrame] = {}
     for mid, cfg in MODEL_REGISTRY.items():
-        scored = score_for_model(target, fx, mid, live_pct_selected=live_pct)
+        scored = score_for_model(target, fx, mid, live_pct_selected=scoring_pct)
         scored = attach_archetypes(scored, retro, prospective)
         scored = apply_filters(scored)
         scored = tag_anti_picks(scored)
@@ -940,9 +1004,12 @@ def main():
     # captain ranking is robust to the model weight choice.
     print("[17] refreshing captain + bench on live data…")
     try:
+        live_pct_for_captain = refresh_live_percent_selected(force=True)
+        print(f"[17]   live %selected for captain refresh: "
+              f"{len(live_pct_for_captain)} players")
         live_fx = assemble_fixture_profile(target)
         live_scored = score_for_model(target, live_fx, "m1_banker",
-                                      live_pct_selected=live_pct)
+                                      live_pct_selected=live_pct_for_captain)
         live_ev_by_pid = dict(
             zip(live_scored["fantasy_player_id"].astype(int),
                 live_scored["ev_model"].astype(float))
