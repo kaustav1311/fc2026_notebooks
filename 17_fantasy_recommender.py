@@ -68,7 +68,16 @@ LOCKED_ROOT = PROC / "locked"
 # against actions/cache restoring a poisoned lock from an older code revision
 # (this is exactly what put R3-contaminated picks back on the PWA every cron
 # tick despite a clean code path: the cache kept reviving a pre-fix lock).
-LOCK_SCHEMA_VERSION = 4
+LOCK_SCHEMA_VERSION = 5
+# v5 (2026-06-27): seal the bulk-copy leak vectors. fantasy_players.parquet
+# now PROJECTED to lock-bounded state (total_points / last_round_points /
+# avg_points / round_points_json / form recomputed from round_points_json
+# filtered to round_id <= lock_round). wc26_match_trends_365 filtered by
+# snapshot_ts <= lock_cutoff_utc. Polymarket markets + weather forecasts
+# bulk-copied (no per-snapshot key) but their mtime stamped in manifest for
+# audit. lock_cutoff_utc = min(R{target}.kickoff_utc) - 1h. The lock dir is
+# now a TIME CAPSULE at "the moment before R{target}'s first kickoff" —
+# any rebuild reproduces the same bounded state regardless of when it runs.
 
 # Cumulative / aggregate parquets we REBUILD from per-match sources inside
 # the lock. Listed here for documentation; we don't copy them.
@@ -113,6 +122,133 @@ _NB16_SUM_COLS = [
 ]
 _NB16_AVG_COLS = ["AvgSpeed", "XG"]
 _NB16_MAX_COLS = ["TopSpeed"]
+
+
+def _lock_cutoff_utc(target_round: int) -> "pd.Timestamp | None":
+    """The 'time capsule' anchor for the lock dir.
+
+    Defined as min(kickoff_utc) of the target round's fixtures - 1h. This is
+    the moment we freeze 'the state of the world' to: every per-snapshot
+    table is filtered to <= this timestamp. The 1-hour buffer absorbs the
+    pre-match window where lineups + last-minute market moves shouldn't yet
+    influence picks (and where a finished match's stats haven't propagated).
+
+    Returns None if R{target} has no fixtures (e.g. R32 before group stage
+    finishes) — caller then skips time-pinning and bulk-copies as fallback.
+    """
+    try:
+        rm = pd.read_parquet(PROC / "fantasy_round_matches.parquet")
+        sq = pd.read_parquet(PROC / "fantasy_squads.parquet")[["fantasy_squad_id", "abbr"]]
+        sq_h = sq.rename(columns={"fantasy_squad_id": "home_squad_id", "abbr": "home_nation_id"})
+        sq_a = sq.rename(columns={"fantasy_squad_id": "away_squad_id", "abbr": "away_nation_id"})
+        rm2 = rm[rm["round_id"].astype(int) == target_round]
+        rm2 = rm2.merge(sq_h, on="home_squad_id", how="left").merge(sq_a, on="away_squad_id", how="left")
+        m = pd.read_parquet(PROC / "wc26_stg_matches.parquet")[
+            ["fifa_match_id", "home_nation_id", "away_nation_id", "kickoff_utc"]
+        ]
+        joined = rm2.merge(m, on=["home_nation_id", "away_nation_id"], how="left")
+        kos = pd.to_datetime(joined["kickoff_utc"], utc=True, errors="coerce").dropna()
+        if kos.empty:
+            return None
+        return kos.min() - pd.Timedelta(hours=1)
+    except Exception:
+        return None
+
+
+def _project_fantasy_players_to_lock(src: Path, dst: Path, lock_round: int) -> dict:
+    """Re-derive fantasy_players.parquet's per-round aggregate columns from
+    round_points_json, filtered to round_id <= lock_round.
+
+    Closes the bulk-copy leak: total_points / last_round_points / avg_points /
+    round_points_json are FIFA-side aggregates that update as new rounds play.
+    If we bulk-copy them when the lock is built after R{target} has started,
+    they carry R{target} contamination into b4's form/avg/last/total/consistency
+    components.
+
+    form is recomputed as the mean of the last 2 projected round_points
+    (FIFA's exact form formula isn't public; this is a defensible proxy
+    that mirrors how form is consumed in b4 — as a recency-weighted summary).
+
+    Static columns (identity, position, price, percent_selected, is_active)
+    are preserved as-is from live (those don't have per-round semantics).
+    """
+    fp = pd.read_parquet(src)
+
+    def _parse_json(j):
+        if not j:
+            return {}
+        try:
+            return json.loads(j) if isinstance(j, str) else dict(j)
+        except Exception:
+            return {}
+
+    def _project(row):
+        rj = _parse_json(row.get("round_points_json"))
+        # Filter to keys <= lock_round
+        kept = {}
+        for k, v in rj.items():
+            try:
+                ki = int(k)
+            except (TypeError, ValueError):
+                continue
+            if ki <= lock_round and v is not None:
+                try:
+                    kept[ki] = float(v)
+                except (TypeError, ValueError):
+                    continue
+        # New aggregates
+        played = list(kept.values())
+        total = float(sum(played)) if played else 0.0
+        # last_round_points = round_points at lock_round, or 0 if not played
+        last = float(kept.get(lock_round, 0.0))
+        # avg = total / count played (0 if none)
+        avg = (total / len(played)) if played else 0.0
+        # form = mean of last 2 played rounds (or all if fewer)
+        if played:
+            ordered = [kept[k] for k in sorted(kept.keys())]
+            form = float(sum(ordered[-2:]) / min(2, len(ordered)))
+        else:
+            form = 0.0
+        # round_points_json: keep only kept keys, original key type as str
+        # (mirrors FIFA endpoint's "1"/"2" string keys)
+        rj_out = {str(k): kept[k] for k in sorted(kept.keys())}
+        return pd.Series({
+            "total_points": total,
+            "last_round_points": last,
+            "avg_points": avg,
+            "form": form,
+            "round_points_json": json.dumps(rj_out),
+        })
+
+    proj = fp.apply(_project, axis=1)
+    for col in ("total_points", "last_round_points", "avg_points", "form", "round_points_json"):
+        fp[col] = proj[col]
+
+    fp.to_parquet(dst, index=False)
+    # Audit summary returned for manifest stamping
+    return {
+        "rows": int(len(fp)),
+        "max_total_points": float(fp["total_points"].max()),
+        "max_last_round_points": float(fp["last_round_points"].max()),
+        "max_form": float(fp["form"].max()),
+        "players_with_any_played": int((fp["total_points"] != 0).sum()),
+    }
+
+
+def _project_trends_365_to_lock(src: Path, dst: Path, cutoff_utc) -> dict:
+    """Filter 365scores trends to snapshot_ts <= cutoff_utc. Trends evolve
+    hour-to-hour and reflect ALL data seen so far — leaving them unfiltered
+    means R{target}-relevant trends (top trend confidence, isTop flips) feed
+    B5's trend_mod even though the rest of the bracket is bounded.
+    """
+    df = pd.read_parquet(src)
+    before = len(df)
+    if "snapshot_ts" in df.columns:
+        ts = pd.to_datetime(df["snapshot_ts"], utc=True, errors="coerce")
+        keep_mask = ts <= cutoff_utc
+        df = df[keep_mask]
+    df.to_parquet(dst, index=False)
+    return {"rows_kept": int(len(df)), "rows_dropped": int(before - len(df))}
 
 
 def _match_ids_through_round(lock_round: int) -> tuple[set, set]:
@@ -486,6 +622,32 @@ def prepare_locked_snapshot(target_round: int, *, force_relock: bool = False) ->
             except Exception as exc:  # noqa: BLE001
                 reasons.append(f"content sanity skipped ({exc})")
 
+        # v5+ fantasy_players sanity — catches a bulk-copy regression by
+        # walking round_points_json and asserting no rounds > lock_round
+        # appear. Cheap (1488 rows × small dict).
+        fp_path = lock_dir / "fantasy_players.parquet"
+        if fp_path.exists():
+            try:
+                _fp = pd.read_parquet(fp_path, columns=["round_points_json"])
+                _max_round_in_lock = 0
+                for j in _fp["round_points_json"].dropna():
+                    try:
+                        d = json.loads(j) if isinstance(j, str) else dict(j)
+                        for k in d.keys():
+                            ki = int(k)
+                            if ki > _max_round_in_lock:
+                                _max_round_in_lock = ki
+                    except Exception:
+                        continue
+                if _max_round_in_lock > lock_round:
+                    reasons.append(
+                        f"fantasy_players.round_points_json max round "
+                        f"{_max_round_in_lock} > lock_round {lock_round} "
+                        f"(bulk-copy of fantasy_players leaked R{_max_round_in_lock} aggregates)"
+                    )
+            except Exception as exc:  # noqa: BLE001
+                reasons.append(f"fantasy_players sanity skipped ({exc})")
+
         if not reasons:
             print(f"[17] reusing locked snapshot: {lock_dir.relative_to(ROOT)} "
                   f"(schema v{LOCK_SCHEMA_VERSION})")
@@ -596,6 +758,49 @@ def prepare_locked_snapshot(target_round: int, *, force_relock: bool = False) ->
                         lock_end_utc,
                     )
 
+    # Step 4 — PROJECT fantasy_players.parquet (v5+). Bulk-copy left
+    # total_points / last_round_points / avg_points / form / round_points_json
+    # as live-FIFA-endpoint values, so a lock rebuilt after R{target} starts
+    # silently leaks R{target} aggregates into b4. Re-derive from
+    # round_points_json filtered to round_id <= lock_round.
+    fp_src = PROC / "fantasy_players.parquet"
+    fp_dst = lock_dir / "fantasy_players.parquet"
+    fp_audit = {}
+    if fp_src.exists():
+        fp_audit = _project_fantasy_players_to_lock(fp_src, fp_dst, lock_round)
+        print(f"[17]   projected fantasy_players: {fp_audit['rows']} rows; "
+              f"max_total={fp_audit['max_total_points']:.0f} "
+              f"max_last_round={fp_audit['max_last_round_points']:.0f} "
+              f"max_form={fp_audit['max_form']:.2f} "
+              f"any_played={fp_audit['players_with_any_played']}")
+
+    # Step 5 — TIME-PIN per-snapshot tables to lock_cutoff_utc (v5+).
+    # The cutoff is the moment we want the lock to represent: just before
+    # the target round's first kickoff. Tables with snapshot_ts get filtered;
+    # tables without snapshot_ts (Polymarket, weather) are bulk-copied but
+    # their mtime stamped in the manifest for audit.
+    cutoff_utc = _lock_cutoff_utc(target_round)
+    trends_audit = {}
+    trends_src = PROC / "wc26_match_trends_365.parquet"
+    if cutoff_utc is not None and trends_src.exists():
+        trends_audit = _project_trends_365_to_lock(
+            trends_src, lock_dir / "wc26_match_trends_365.parquet", cutoff_utc,
+        )
+        print(f"[17]   filtered wc26_match_trends_365 to snapshot_ts <= "
+              f"{cutoff_utc.isoformat()}: kept {trends_audit['rows_kept']}, "
+              f"dropped {trends_audit['rows_dropped']}")
+    elif cutoff_utc is None:
+        print(f"[17]   skip trend filter: no kickoff_utc for R{target_round} "
+              f"(R32 TBD before group-stage close?)")
+
+    # Bulk-copied per-snapshot tables — stamp mtime for audit
+    poly_src = PROC / "wc26_match_polymarket_markets.parquet"
+    weather_src = PROC / "wc26_match_weather.parquet"
+    bulk_mtimes = {}
+    for nm, src in (("polymarket_markets", poly_src), ("weather", weather_src)):
+        if src.exists():
+            bulk_mtimes[nm] = datetime.fromtimestamp(src.stat().st_mtime, tz=timezone.utc).isoformat()
+
     # Freeze live %selected ONCE at lock-creation time. The sigmoid in
     # b4's sb_boost (1 / (1 + exp((pct_sel - 5)/1))) is steep at the 5%
     # gate — if we inject fresh ownership at every cron tick it cascades
@@ -617,7 +822,7 @@ def prepare_locked_snapshot(target_round: int, *, force_relock: bool = False) ->
         "n_players": len(frozen_pct),
         "percent_selected": {str(k): float(v) for k, v in frozen_pct.items()},
     }, indent=2))
-    print(f"[17]   froze live %selected: {len(frozen_pct)} players → "
+    print(f"[17]   froze live %selected: {len(frozen_pct)} players -> "
           f"{pct_path.name}")
 
     # Stamp a manifest for traceability + debugging
@@ -626,6 +831,7 @@ def prepare_locked_snapshot(target_round: int, *, force_relock: bool = False) ->
         "target_round": target_round,
         "lock_round": lock_round,
         "created_utc": datetime.now(timezone.utc).isoformat(),
+        "lock_cutoff_utc": cutoff_utc.isoformat() if cutoff_utc is not None else None,
         "locked_match_count": len(allowed_match_numbers),
         "locked_match_numbers_sample": sorted(allowed_match_numbers)[:10] + ["..."]
             if len(allowed_match_numbers) > 10 else sorted(allowed_match_numbers),
@@ -633,6 +839,9 @@ def prepare_locked_snapshot(target_round: int, *, force_relock: bool = False) ->
         "filtered_per_round": [LOCK_FILTERED_PER_ROUND] if dst_prs.exists() else [],
         "filtered_per_match": [f for f in LOCK_FILTERED_PER_MATCH if (lock_dir / f).exists()],
         "rebuilt_aggregates": [f for f in LOCK_REBUILT_FILES if (lock_dir / f).exists()],
+        "projected_fantasy_players": fp_audit,
+        "filtered_trends_365": trends_audit,
+        "bulk_copied_snapshot_mtimes_utc": bulk_mtimes,
     }, indent=2, default=str))
     return lock_dir
 

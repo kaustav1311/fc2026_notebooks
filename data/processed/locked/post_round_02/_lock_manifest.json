@@ -1,8 +1,9 @@
 {
-  "schema_version": 4,
+  "schema_version": 5,
   "target_round": 3,
   "lock_round": 2,
-  "created_utc": "2026-06-27T09:56:00.545284+00:00",
+  "created_utc": "2026-06-27T11:58:47.464702+00:00",
+  "lock_cutoff_utc": "2026-06-24T18:00:00+00:00",
   "locked_match_count": 48,
   "locked_match_numbers_sample": [
     1,
@@ -31,5 +32,20 @@
     "wc26_stg_player_powerrank.parquet",
     "wc26_stg_players_view.parquet",
     "wc26_stg_players.parquet"
-  ]
+  ],
+  "projected_fantasy_players": {
+    "rows": 1488,
+    "max_total_points": 33.0,
+    "max_last_round_points": 24.0,
+    "max_form": 16.5,
+    "players_with_any_played": 837
+  },
+  "filtered_trends_365": {
+    "rows_kept": 459,
+    "rows_dropped": 0
+  },
+  "bulk_copied_snapshot_mtimes_utc": {
+    "polymarket_markets": "2026-06-22T11:17:13.266424+00:00",
+    "weather": "2026-06-23T04:58:51.526473+00:00"
+  }
 }
