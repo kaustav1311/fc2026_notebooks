@@ -1077,6 +1077,7 @@ def build_joint_picks(model_outputs: dict, top_n: int = 30) -> dict:
     consensus_rows = []
     surprise_rows = {mid: [] for mid in model_outputs}
 
+    import statistics as _stats
     for pid in all_pids:
         in_models = [mid for mid, s in top_sets.items() if pid in s]
         # Collect ev across models
@@ -1092,7 +1093,14 @@ def build_joint_picks(model_outputs: dict, top_n: int = 30) -> dict:
         if identity is None:
             continue
         identity["evs"] = {mid: round(v, 2) for mid, v in evs.items()}
-        identity["max_ev"] = round(max(evs.values()), 2) if evs else 0.0
+        # 2026-06-28: median replaces max as the primary sort. Was: one
+        # model loving a player (typically M4 SB Hunter's contrarian
+        # upsets) could put them at the top of consensus / per-position
+        # rankings even when the other 3 models ranked them low.
+        # Median requires agreement across the full ensemble.
+        ev_values = list(evs.values())
+        identity["max_ev"] = round(max(ev_values), 2) if ev_values else 0.0
+        identity["median_ev"] = round(_stats.median(ev_values), 2) if ev_values else 0.0
         identity["models_in_top"] = in_models
 
         if len(in_models) >= 2:
@@ -1100,24 +1108,29 @@ def build_joint_picks(model_outputs: dict, top_n: int = 30) -> dict:
         elif len(in_models) == 1:
             surprise_rows[in_models[0]].append(identity)
 
-    consensus_rows.sort(key=lambda r: -r["max_ev"])
+    # Sort consensus by median_ev (cross-model agreement). Surprises stay on
+    # max_ev because they're 1-model picks by definition — there's no
+    # ensemble to median across.
+    consensus_rows.sort(key=lambda r: -r["median_ev"])
     for mid in surprise_rows:
         surprise_rows[mid].sort(key=lambda r: -r["max_ev"])
 
     # Per-position top — sized to match the PWA Suggested Picks cap (50 total).
     # PWA renders min(emitted, POS_CAP) where POS_CAP is {GK:5, DEF:15, MID:15,
-    # FWD:15}. Crucially this list is built from the FULL scored frames, not
-    # restricted to the top-30 union above — otherwise positions starved of
-    # top-30 candidates (e.g. zero GKs in any model's top 30) can never fill.
-    # That bug was producing "12 FWD / 5 DEF / 0 GK" on the PWA.
+    # FWD:15}. Built from FULL scored frames per position so positions starved
+    # of top-30 candidates still fill (closes the "12 FWD / 5 DEF / 0 GK" bug).
     #
-    # Algo per position:
-    #   1. Concatenate every model's rows for that position.
-    #   2. For each (fantasy_player_id), keep the row with the highest
-    #      ev_model — that becomes ev_max + ev_max_model.
-    #   3. Sort by ev_max DESC and take top N.
+    # 2026-06-28: ranking switched from MAX(ev_model) across models to MEDIAN
+    # (4 models -> mean of middle 2). Under max-dedup, M4 SB Hunter's
+    # contrarian upsets (Sweden/Algeria etc.) ranked top even when M1/M2/M3
+    # disagreed — joint top-50 was effectively M4's top with the other 3
+    # models providing back-fill. Median requires ensemble agreement: a
+    # contrarian pick has to score well in at least 2-3 models to surface.
+    # ev_max + ev_max_model still surfaced for display/audit; ranking key
+    # is ev_median.
     per_pos_top = {}
     pos_n = {"GK": 5, "DEF": 15, "MID": 15, "FWD": 15}
+    model_ids = list(model_outputs.keys())
     for pos, n in pos_n.items():
         # Stack per-position slices from every model, tagged with model_id
         frames = []
@@ -1131,17 +1144,25 @@ def build_joint_picks(model_outputs: dict, top_n: int = 30) -> dict:
             per_pos_top[pos] = []
             continue
         stacked = pd.concat(frames, ignore_index=True)
-        # Best (ev, model) per fantasy_player_id
-        best = stacked.sort_values("ev_model", ascending=False).drop_duplicates(
+        # Aggregate per pid: median + max + which model held max
+        agg = stacked.groupby("fantasy_player_id").agg(
+            ev_median=("ev_model", "median"),
+            ev_max=("ev_model", "max"),
+            n_models=("ev_model", "count"),
+        ).reset_index()
+        # ev_max_model = model_id of the row with the largest ev_model
+        max_rows = stacked.sort_values("ev_model", ascending=False).drop_duplicates(
             subset="fantasy_player_id", keep="first"
-        )
-        best = best.head(n)
-        # Re-join the identity columns from the model that owned the best row
+        )[["fantasy_player_id", "model_id"]].rename(columns={"model_id": "ev_max_model"})
+        agg = agg.merge(max_rows, on="fantasy_player_id", how="left")
+        # Sort by median DESC; tiebreak by max DESC so a tied-median pick
+        # with a higher ceiling wins
+        agg = agg.sort_values(["ev_median", "ev_max"], ascending=[False, False]).head(n)
+        # Re-join identity columns from the model that holds the max row
         rows_out = []
-        for i, br in enumerate(best.itertuples(index=False)):
+        for i, br in enumerate(agg.itertuples(index=False)):
             pid = int(br.fantasy_player_id)
-            mid = br.model_id
-            ev = float(br.ev_model)
+            mid = br.ev_max_model
             src = model_outputs[mid]
             row = src[src["fantasy_player_id"] == pid].iloc[0]
             rows_out.append({
@@ -1154,8 +1175,10 @@ def build_joint_picks(model_outputs: dict, top_n: int = 30) -> dict:
                 "position": pos,
                 "price": float(row.get("price") or 0),
                 "percent_selected": float(row.get("percent_selected") or 0),
-                "ev_max": ev,
+                "ev_max": float(br.ev_max),
+                "ev_median": float(br.ev_median),
                 "ev_max_model": mid,
+                "n_models_scoring": int(br.n_models),
                 "fixture_shape": row.get("fixture_shape"),
             })
         per_pos_top[pos] = rows_out
