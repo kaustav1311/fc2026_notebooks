@@ -1370,6 +1370,25 @@ def main():
             print(f"[17]   WARN: persist_squad failed for {sq.get('model_id')}: {exc}")
     print(f"[17]   persisted {len(squads)} squads to {Path('data/processed/persistent_squads')}")
 
+    # 8c. Per-round final ARCHIVE (joint_picks + strategy_squads).
+    # Overwritten every tick while target stays at R{N}; the last write
+    # before target flips to R{N+1} is the canonical "final-of-round-N"
+    # state, available for cross-round comparison in the PWA's
+    # CheckpointPicker. Both warehouse + PWA copies are kept.
+    archive_dir = PROC / "round_archives"
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    for kind, payload in (
+        ("joint_picks", joint),
+        ("strategy_squads", squads),
+        ("position_suggestor", suggestor),
+    ):
+        fname = f"wc26_fantasy_{kind}_R{target:02d}_final.json"
+        safe_payload = dump_js_safe(payload)
+        (archive_dir / fname).write_text(safe_payload)
+        (PWA_JSON / fname).write_text(safe_payload)
+    print(f"[17]   wrote round-archive copies for R{target:02d} "
+          f"(joint_picks + strategy_squads + position_suggestor)")
+
     # 9. Historical snapshot (per-round-lock freeze)
     history_dir = PROC / "history" / f"round_{target:02d}"
     history_dir.mkdir(parents=True, exist_ok=True)
