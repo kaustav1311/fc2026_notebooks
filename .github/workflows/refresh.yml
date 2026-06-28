@@ -37,6 +37,11 @@ on:
         required: false
         default: false
         type: boolean
+      force_archive_overwrite:
+        description: 'Overwrite the current round-archive even if it already exists (use when model code changed and you want the round-frozen squads regenerated BEFORE first kickoff)'
+        required: false
+        default: false
+        type: boolean
 
 # One refresh at a time — if a prior run is still going, skip rather than
 # stacking up parallel pulls against the same upstream APIs.
@@ -191,6 +196,14 @@ jobs:
       - name: Run refresh.py
         env:
           AUDIT_APP_PATH: ${{ github.workspace }}/pwa-repo
+          # FORCE_ARCHIVE_OVERWRITE bypasses the round-archive immutability
+          # guard in 17_fantasy_recommender.py step 8c. Use ONLY when the
+          # model code has improved AND the current round hasn't started
+          # playing yet — the regen overwrites the locked archive with the
+          # new-model output, then immutability re-locks for the rest of
+          # the round. NEVER use during live matches (the freeze is what
+          # protects against in-match data leak).
+          FORCE_ARCHIVE_OVERWRITE: ${{ inputs.force_archive_overwrite == true && '1' || '' }}
         run: |
           ARGS=""
           if [ -n "${{ inputs.bucket }}" ]; then
@@ -202,6 +215,9 @@ jobs:
           fi
           if [ "${{ inputs.force_refresh }}" = "true" ]; then
             ARGS="$ARGS --force-refresh"
+          fi
+          if [ "$FORCE_ARCHIVE_OVERWRITE" = "1" ]; then
+            echo "::notice::FORCE_ARCHIVE_OVERWRITE=1 — round-archive immutability bypassed for this run; locked archive will be regenerated from current model code."
           fi
           echo "Running: python refresh.py $ARGS  (AUDIT_APP_PATH=$AUDIT_APP_PATH)"
           # refresh.py exits 1 if ANY notebook failed (per-notebook try/except
