@@ -820,15 +820,22 @@ MODEL_REGISTRY = {
         "post_boosts": [],          # use brackets as-is
         "fixture_amplifier": 1.0,    # full B5 amplification
         "sb_quota": 9,               # 9 of 15 from <5% band
+        # Captain selector: default — max ev_live across MID/FWD.
+        "captain_selector": "ev_live",
     },
     "m2_form_hunter": {
         "name": "Form Hunter",
         "blurb": "Recency-weighted. Recent goals, started-pct, fotmob rating, last-round explosions. Punishes cold streaks even on strong fixtures.",
-        "weights": {"w_b1_overall": 0.10, "w_b2_wc_perf": 0.20,
-                    "w_b3_external": 0.40, "w_b4_fantasy": 0.30},
-        # Post-boost: add a heavy recency sub-score on top of bracket_sum
+        # 2026-06-27: rebalanced to diversify from M1 top picks. Reduced B3
+        # (which biases toward globally-top-rated megastars like Gakpo/Messi
+        # equally for every model) and B4 (form is already in the post-boost
+        # below — double-counting was forcing the same elite players to the
+        # top). Bumped post-boost weight so recent-form-leader surfaces above
+        # consistent giants.
+        "weights": {"w_b1_overall": 0.10, "w_b2_wc_perf": 0.25,
+                    "w_b3_external": 0.25, "w_b4_fantasy": 0.40},
         "post_boosts": [
-            {"name": "recent_form_streak", "weight": 0.30,
+            {"name": "recent_form_streak", "weight": 0.45,
              "components": [
                  ("recent5_goals", "rank_pct"),
                  ("recent10_goals", "rank_pct"),
@@ -837,17 +844,24 @@ MODEL_REGISTRY = {
                  ("last_round_points", "rank_pct"),
              ]},
         ],
-        "fixture_amplifier": 0.85,   # slightly dampened — recent form > fixture
-        "sb_quota": 6,               # less differential bias
+        "fixture_amplifier": 0.85,
+        "sb_quota": 6,
+        # Captain selector: pick MID/FWD with highest recent form, not raw EV.
+        # Falls back to ev_live if the post-boost column isn't present.
+        "captain_selector": "recent_form_streak",
     },
     "m3_stat_max": {
         "name": "Stat Maximizer",
         "blurb": "Pure FIFA-stats. Powerrank + position-routed per-90 + creativity + duels. Ignores ownership entirely — picks the best player regardless of crowd.",
-        "weights": {"w_b1_overall": 0.15, "w_b2_wc_perf": 0.50,
-                    "w_b3_external": 0.25, "w_b4_fantasy": 0.10},
-        # Post-boost: add a creativity / playmaking sub-score on top
+        # 2026-06-27: rebalanced to surface RAW-STAT leaders above
+        # globally-rated megastars. Dropped B3 (external observers' rating
+        # already bakes in reputation; stat-max should ignore reputation)
+        # and bumped both post-boosts so creativity + powerrank-pure leaders
+        # can overtake the all-rounders.
+        "weights": {"w_b1_overall": 0.15, "w_b2_wc_perf": 0.55,
+                    "w_b3_external": 0.15, "w_b4_fantasy": 0.15},
         "post_boosts": [
-            {"name": "creativity_engine", "weight": 0.20,
+            {"name": "creativity_engine", "weight": 0.30,
              "components": [
                  ("fotmob_wc_chances_created", "per90_rank_pct"),
                  ("fotmob_wc_big_chances_created", "per90_rank_pct"),
@@ -856,7 +870,7 @@ MODEL_REGISTRY = {
                  ("fifa_wc_LinebreaksAttempted", "per90_rank_pct"),
                  ("fifa_wc_NumberOfInvolvements", "per90_rank_pct"),
              ]},
-            {"name": "powerrank_pure", "weight": 0.20,
+            {"name": "powerrank_pure", "weight": 0.30,
              "components": [
                  ("avg_attacking_score", "rank_pct"),
                  ("avg_defensive_score", "rank_pct"),
@@ -865,7 +879,9 @@ MODEL_REGISTRY = {
              ]},
         ],
         "fixture_amplifier": 1.0,
-        "sb_quota": 3,               # ownership-blind → low SB quota
+        "sb_quota": 3,
+        # Captain selector: pick MID/FWD with highest creativity post-boost.
+        "captain_selector": "creativity_engine",
     },
     "m4_sb_hunter": {
         "name": "SB Hunter",
@@ -897,6 +913,9 @@ MODEL_REGISTRY = {
         "sb_quota": 12,
         # Custom assembler tag — orchestrator routes m4 to assemble_sb_hunter_squad
         "assembler": "sb_hunter",
+        # Captain selector: pick FWD with highest sure-shot-fwd post-boost
+        # (or influential MID if no FWD in XI).
+        "captain_selector": "sure_shot_fwd",
     },
 }
 
@@ -1823,42 +1842,44 @@ def _ev_strategy(scored: pd.DataFrame, strat: dict) -> pd.Series:
 # TODO(nb_17): replace with data-driven planning (per-model EV variance per
 # round) once a multi-checkpoint history exists.
 
+# 2026-06-27: simplified to 12th Man ONLY across KO rounds. User direction:
+# Wildcard / Max-C / Qualification Booster / Mystery / Clean Sheet Shield = all
+# unused. Each model fires its 12th Man on its model-specific best KO round so
+# the 4 strategies stagger across R32 → R16 → QF → SF. R8 Final is chip-free
+# (the squad's depth does the talking at that point).
 _CHIP_PLAN_BY_MODEL = {
-    "m1_banker":      {"wildcard": 3, "twelfth_man": 8, "max_captain": 6, "qualification_booster": 7, "mystery_booster": 4},
-    "m2_form_hunter": {"wildcard": 5, "twelfth_man": 4, "max_captain": 7, "qualification_booster": 6, "mystery_booster": 4},
-    "m3_stat_max":    {"wildcard": 8, "twelfth_man": 5, "max_captain": 8, "qualification_booster": 7, "mystery_booster": 5},
-    "m4_sb_hunter":   {"wildcard": 5, "twelfth_man": 4, "max_captain": 4, "qualification_booster": 5, "mystery_booster": 6},
+    "m1_banker":      {"twelfth_man": 4},   # R32: banker plays bench depth early
+    "m2_form_hunter": {"twelfth_man": 5},   # R16: form crystallises by knockout 16
+    "m3_stat_max":    {"twelfth_man": 6},   # QF:  stat-max sweet spot
+    "m4_sb_hunter":   {"twelfth_man": 7},   # SF:  highest-leverage differential round
 }
-_CHIP_PLAN_DEFAULT = {
-    "wildcard": 4, "twelfth_man": 4, "max_captain": 6,
-    "qualification_booster": 5, "mystery_booster": 4,
-}
-# Per-chip eligibility for a given round_id (1..8).
+_CHIP_PLAN_DEFAULT = {"twelfth_man": 4}
+# Per-chip eligibility — only 12th Man honoured now. Any other chip dropped.
 _CHIP_ELIGIBLE = {
-    "wildcard":              lambda r: r != 1 and r != 4,
-    "twelfth_man":           lambda r: 1 <= r <= 8,
-    "max_captain":           lambda r: 1 <= r <= 8,
-    "qualification_booster": lambda r: 4 <= r <= 8,
-    "mystery_booster":       lambda r: 4 <= r <= 8,
+    "twelfth_man": lambda r: 1 <= r <= 8,
 }
 
 
 def plan_chips(model_id: str, target_round_id: int) -> dict:
     """Emit a forward-looking chip plan: {chip_id: planned_round_id}.
 
-    Per-model heuristic mapped above. If a chip's preferred round is < the
-    current target_round_id (i.e. the lock already passed without firing it),
-    snap to the next eligible round so the plan stays usable.
+    Per-model heuristic mapped above. If a chip's preferred round is <
+    target_round_id (i.e. the lock already passed without firing it), snap
+    to the next eligible round so the plan stays usable. Returns {} if no
+    chips are scheduled for or after the target round.
     """
     base = _CHIP_PLAN_BY_MODEL.get(model_id, _CHIP_PLAN_DEFAULT)
     plan = {}
     for chip, round_id in base.items():
+        if chip not in _CHIP_ELIGIBLE:
+            continue  # disabled chip; skip entirely
         if round_id < target_round_id:
-            # Find next eligible round ≥ target.
             for r in range(target_round_id, 9):
                 if _CHIP_ELIGIBLE[chip](r):
                     round_id = r
                     break
+            else:
+                continue  # no eligible round left; omit
         plan[chip] = int(round_id)
     return plan
 
@@ -2292,6 +2313,8 @@ def assemble_sb_hunter_squad(scored: pd.DataFrame, strat: dict,
 def refresh_squad_captain_and_bench(
     squad: dict,
     live_ev_by_pid: dict,
+    captain_selector: str = "ev_live",
+    selector_col_by_pid: dict | None = None,
 ) -> dict:
     """Re-pick captain (and re-order bench priority) using LIVE EV.
 
@@ -2308,6 +2331,17 @@ def refresh_squad_captain_and_bench(
       4. Recomputes projected_pts_with_captain using live ev for captain
          and locked ev_strategy for everyone else.
 
+    captain_selector:
+      "ev_live"             — pick by live ev_model (M1 Banker default)
+      "recent_form_streak"  — pick by recent-form post-boost (M2 Form Hunter)
+      "creativity_engine"   — pick by creativity post-boost (M3 Stat Max)
+      "sure_shot_fwd"       — pick FWD by sure-shot post-boost, fallback
+                              influential_mid for MID (M4 SB Hunter)
+
+    selector_col_by_pid maps the chosen selector to a per-player score; the
+    caller supplies this from the scored frame (so it sees the post-boost
+    columns). Falls back to ev_live if missing.
+
     Mutates `squad` in place AND returns it for chaining.
     """
     xi = squad.get("starting_xi") or []
@@ -2318,9 +2352,25 @@ def refresh_squad_captain_and_bench(
         return float(live_ev_by_pid.get(p["fantasy_player_id"],
                                         p.get("ev_strategy", 0)))
 
-    attackers = [p for p in xi if p.get("position") in ("MID", "FWD")]
+    def _selector_score(p):
+        if selector_col_by_pid and captain_selector != "ev_live":
+            pid = int(p["fantasy_player_id"])
+            v = selector_col_by_pid.get(pid)
+            if v is not None:
+                return float(v)
+        return _live_ev(p)
+
+    if captain_selector == "sure_shot_fwd":
+        # M4: prefer FWDs first, fallback to MIDs (influential_mid)
+        attackers = [p for p in xi if p.get("position") == "FWD"]
+        if not attackers:
+            attackers = [p for p in xi if p.get("position") == "MID"]
+        if not attackers:
+            attackers = xi
+    else:
+        attackers = [p for p in xi if p.get("position") in ("MID", "FWD")]
     pool = attackers if attackers else xi
-    pool_sorted = sorted(pool, key=lambda p: -_live_ev(p))
+    pool_sorted = sorted(pool, key=lambda p: -_selector_score(p))
     new_captain = int(pool_sorted[0]["fantasy_player_id"])
     new_vice = int(pool_sorted[1]["fantasy_player_id"]) if len(pool_sorted) > 1 else None
 
@@ -2334,7 +2384,7 @@ def refresh_squad_captain_and_bench(
 
     squad["captain_id"] = new_captain
     squad["vice_captain_id"] = new_vice
-    squad["captain_picked_by"] = "live_ev_mid_fwd_preferred"
+    squad["captain_picked_by"] = captain_selector
 
     # Re-order bench within position — highest live ev first so auto-sub
     # picks the best backup when FIFA Fantasy reaches into the bench.

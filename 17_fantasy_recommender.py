@@ -852,6 +852,13 @@ def pick_target_round() -> int:
     fall back to next scheduled, then latest known. Also REQUIRES the round
     to have fixtures: scheduled-but-no-fixtures rounds (R32 TBD until the
     group stage finishes) get skipped to the prior playable round.
+
+    2026-06-28: in the gap between rounds (R3 ended, R4 fixtures not yet
+    materialized in fantasy_round_matches because upstream nb_03/group-
+    standings still in progress), fall back to "highest round_id with
+    fixtures" instead of dropping to most-recently-complete (which was R1
+    only because R2 has status='playing', R3 'scheduled'). Without this
+    fix the recommender targets R1 → empty lock → all downstream fails.
     """
     fr = pd.read_parquet(PROC / "fantasy_rounds.parquet")
     frm = pd.read_parquet(PROC / "fantasy_round_matches.parquet")
@@ -870,7 +877,13 @@ def pick_target_round() -> int:
     sched = sched[sched["round_id"].isin(rounds_with_matches)]
     if not sched.empty:
         return int(sched.iloc[0]["round_id"])
-    # Otherwise the most recently completed
+    # Gap-between-rounds: the highest round_id that has fixtures in frm is the
+    # last playable target. R3 has fixtures even after R3 ends and before R4
+    # fixtures land — keep the lock + emit on R3 until R4 fixtures materialize.
+    if rounds_with_matches:
+        return int(max(rounds_with_matches))
+    # Otherwise the most recently completed (legacy fallback for very-early
+    # state where no rounds have fixtures yet)
     done = fr[fr["status"] == "complete"].sort_values("round_id")
     if not done.empty:
         return int(done.iloc[-1]["round_id"])
@@ -1223,10 +1236,33 @@ def main():
             zip(live_scored["fantasy_player_id"].astype(int),
                 live_scored["ev_model"].astype(float))
         )
+        # Per-model captain selector — pulls the post-boost column the
+        # model's MODEL_REGISTRY entry names. Each post-boost was attached
+        # to its model's scored frame by _apply_model_boosts, so we look up
+        # the column from the corresponding model_outputs entry. Falls back
+        # to ev_live if missing.
         for sq in squads:
-            refresh_squad_captain_and_bench(sq, live_ev_by_pid)
+            mid = sq.get("model_id") or "m1_banker"
+            cfg = MODEL_REGISTRY.get(mid, {})
+            selector = cfg.get("captain_selector", "ev_live")
+            selector_col_by_pid = None
+            if selector != "ev_live" and mid in model_outputs:
+                src = model_outputs[mid]
+                # Post-boost columns are added as "boost_<name>"
+                col = f"boost_{selector}"
+                if col in src.columns:
+                    selector_col_by_pid = dict(
+                        zip(src["fantasy_player_id"].astype(int),
+                            src[col].astype(float))
+                    )
+            refresh_squad_captain_and_bench(
+                sq, live_ev_by_pid,
+                captain_selector=selector,
+                selector_col_by_pid=selector_col_by_pid,
+            )
         print(f"[17]   refreshed captain on {len(squads)} squads "
-              f"(live EVs available for {len(live_ev_by_pid)} players)")
+              f"(live EVs available for {len(live_ev_by_pid)} players, "
+              f"per-model selectors active)")
         # Re-write strategy squads with the refreshed captain + bench order
         safe_sq = dump_js_safe(squads)
         (PROC / "wc26_fantasy_strategy_squads.json").write_text(safe_sq)
