@@ -1884,6 +1884,242 @@ def plan_chips(model_id: str, target_round_id: int) -> dict:
     return plan
 
 
+# ─── Squad-carry across rounds (transfer-cap-aware) ─────────────────────────
+#
+# Until R3 every round was a full rebuild — fine in group stage where the
+# squad turns over heavily based on remaining fixtures. From R4 onwards FIFA
+# Fantasy real-world rules cap free transfers:
+#   R4 R32 — unlimited (reset window)
+#   R5 R16 — 4
+#   R6 QF  — 4
+#   R7 SF  — 5
+#   R8 Fin — 6
+#
+# We respect this by persisting each model's squad after every emit (to
+# `data/processed/persistent_squads/{model_id}_round_{N:02d}.json`) and, on
+# the next round's assembly, reading the prior squad and applying ONLY N
+# best ev-delta transfers under shape + nation-cap + budget constraints.
+# R4 stays a fresh rebuild (the FIFA-side reset window means the prior R3
+# squad is irrelevant — pick the optimal R32 squad from scratch).
+
+PERSISTENT_SQUADS_DIR = PROC / "persistent_squads"
+
+
+def persist_squad(squad: dict, model_id: str, round_id: int) -> Path:
+    """Save the final emitted squad (post-captain-refresh) under the
+    persistent dir so the NEXT round's assembly can carry it forward."""
+    PERSISTENT_SQUADS_DIR.mkdir(parents=True, exist_ok=True)
+    out = PERSISTENT_SQUADS_DIR / f"{model_id}_round_{round_id:02d}.json"
+    payload = {
+        "model_id": model_id,
+        "round_id": round_id,
+        "starting_xi": squad.get("starting_xi", []),
+        "bench": squad.get("bench", []),
+        "captain_id": squad.get("captain_id"),
+        "vice_captain_id": squad.get("vice_captain_id"),
+        "formation": squad.get("formation"),
+        "budget_used_m": squad.get("budget_used_m"),
+    }
+    out.write_text(json.dumps(payload, default=str), encoding="utf-8")
+    return out
+
+
+def load_prior_squad(model_id: str, prior_round_id: int) -> dict | None:
+    """Load a previously-persisted squad for transfer-carry. Returns None if
+    no file exists (first-run bootstrap → caller falls back to rebuild)."""
+    p = PERSISTENT_SQUADS_DIR / f"{model_id}_round_{prior_round_id:02d}.json"
+    if not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def carry_squad_with_transfers(prior: dict, scored: pd.DataFrame,
+                                free_transfers: int,
+                                budget_m: float = 100.0,
+                                max_per_nation: int = 3) -> dict:
+    """Greedy transfer-cap-respecting squad evolution.
+
+    Algorithm:
+      1. Rank prior squad by current ev_strategy (using new round's scored frame).
+      2. Build candidate pool: players NOT in prior squad, sorted by ev desc per position.
+      3. For each of N free_transfers (loop):
+         - For each position, find biggest ev_delta = (best_candidate_ev - worst_prior_ev_at_position).
+         - Pick the swap with largest positive delta that preserves: budget, nation cap, shape.
+         - Apply it. If no positive-delta swap exists, stop early.
+      4. Re-fix captain/vice/bench from the new squad (caller does live-EV captain refresh later).
+
+    Returns same shape as assemble_strategy_squad output.
+    """
+    # Build a fast lookup from scored frame: pid → (pos, price, nation_id, ev, name)
+    scored_one = scored.drop_duplicates(subset=["fantasy_player_id"]).copy()
+    by_pid = scored_one.set_index("fantasy_player_id").to_dict("index")
+
+    def _player_view(pid: int) -> dict | None:
+        row = by_pid.get(int(pid))
+        if row is None:
+            return None
+        return {
+            "fantasy_player_id": int(pid),
+            "position": row.get("position"),
+            "price": float(row.get("price", 0) or 0),
+            "nation_id": row.get("nation_id"),
+            "known_name": row.get("known_name"),
+            "ev_strategy": float(row.get("ev_model", 0) or 0),
+        }
+
+    # Hydrate prior squad with current ev_model from the scored frame.
+    cur_xi = []
+    cur_bench = []
+    for slot, src in (("starting_xi", "starting_xi"), ("bench", "bench")):
+        for p in prior.get(src, []):
+            v = _player_view(p["fantasy_player_id"])
+            if v is None:
+                # Player no longer in pool (inactive / missing); treat as ev=0,
+                # keep position/price from prior so shape stays intact.
+                v = {
+                    "fantasy_player_id": int(p["fantasy_player_id"]),
+                    "position": p.get("position"),
+                    "price": float(p.get("price", 0) or 0),
+                    "nation_id": p.get("nation_id"),
+                    "known_name": p.get("known_name"),
+                    "ev_strategy": 0.0,
+                }
+            (cur_xi if slot == "starting_xi" else cur_bench).append(v)
+    squad15 = cur_xi + cur_bench
+
+    # Candidate pool — everyone NOT in current squad, grouped by position
+    in_squad = {p["fantasy_player_id"] for p in squad15}
+    candidates_by_pos: dict[str, list[dict]] = {"GK": [], "DEF": [], "MID": [], "FWD": []}
+    for pid, row in by_pid.items():
+        if int(pid) in in_squad:
+            continue
+        pos = row.get("position")
+        if pos not in candidates_by_pos:
+            continue
+        candidates_by_pos[pos].append({
+            "fantasy_player_id": int(pid),
+            "position": pos,
+            "price": float(row.get("price", 0) or 0),
+            "nation_id": row.get("nation_id"),
+            "known_name": row.get("known_name"),
+            "ev_strategy": float(row.get("ev_model", 0) or 0),
+        })
+    for pos in candidates_by_pos:
+        candidates_by_pos[pos].sort(key=lambda x: -x["ev_strategy"])
+
+    def _budget_used(s15):
+        return sum(p["price"] for p in s15)
+
+    def _nation_counts(s15):
+        c: dict[str, int] = {}
+        for p in s15:
+            nid = p.get("nation_id")
+            if nid:
+                c[nid] = c.get(nid, 0) + 1
+        return c
+
+    transfers_made: list[dict] = []
+    for _ in range(int(free_transfers) if free_transfers != float("inf") else 99):
+        # For each position, find the best ev_delta swap
+        best_swap = None
+        best_delta = 0.0
+        for pos in ("GK", "DEF", "MID", "FWD"):
+            squad_at_pos = [p for p in squad15 if p["position"] == pos]
+            cands_at_pos = candidates_by_pos.get(pos, [])
+            if not squad_at_pos or not cands_at_pos:
+                continue
+            squad_at_pos_sorted = sorted(squad_at_pos, key=lambda x: x["ev_strategy"])
+            for out_p in squad_at_pos_sorted:
+                for in_p in cands_at_pos:
+                    delta = in_p["ev_strategy"] - out_p["ev_strategy"]
+                    if delta <= best_delta:
+                        break  # cands sorted desc; no further gains at this pos
+                    # Budget check
+                    new_budget = _budget_used(squad15) - out_p["price"] + in_p["price"]
+                    if new_budget > budget_m:
+                        continue
+                    # Nation cap check
+                    n_counts = _nation_counts(squad15)
+                    if out_p.get("nation_id"):
+                        n_counts[out_p["nation_id"]] -= 1
+                    new_count = n_counts.get(in_p.get("nation_id"), 0) + 1
+                    if new_count > max_per_nation:
+                        continue
+                    # Accept
+                    best_swap = (out_p, in_p)
+                    best_delta = delta
+                    break  # take the best candidate for this out_p
+        if best_swap is None or best_delta <= 0:
+            break
+        out_p, in_p = best_swap
+        # Apply swap in-place
+        squad15 = [in_p if p["fantasy_player_id"] == out_p["fantasy_player_id"] else p for p in squad15]
+        in_squad.discard(out_p["fantasy_player_id"])
+        in_squad.add(in_p["fantasy_player_id"])
+        candidates_by_pos[in_p["position"]] = [
+            c for c in candidates_by_pos[in_p["position"]] if c["fantasy_player_id"] != in_p["fantasy_player_id"]
+        ]
+        candidates_by_pos.setdefault(out_p["position"], []).append({
+            "fantasy_player_id": out_p["fantasy_player_id"],
+            "position": out_p["position"],
+            "price": out_p["price"],
+            "nation_id": out_p.get("nation_id"),
+            "known_name": out_p.get("known_name"),
+            "ev_strategy": out_p["ev_strategy"],
+        })
+        candidates_by_pos[out_p["position"]].sort(key=lambda x: -x["ev_strategy"])
+        transfers_made.append({
+            "out": {"fantasy_player_id": out_p["fantasy_player_id"], "known_name": out_p.get("known_name")},
+            "in": {"fantasy_player_id": in_p["fantasy_player_id"], "known_name": in_p.get("known_name")},
+            "ev_delta": round(best_delta, 2),
+        })
+
+    # Split into XI vs bench by position shape (1 GK + 3 DEF + 2 MID + 1 FWD = 7
+    # minimums; remaining 4 by highest ev). Sort by ev desc, fill XI in order.
+    by_pos: dict[str, list[dict]] = {"GK": [], "DEF": [], "MID": [], "FWD": []}
+    for p in squad15:
+        by_pos.setdefault(p["position"], []).append(p)
+    for pos in by_pos:
+        by_pos[pos].sort(key=lambda x: -x["ev_strategy"])
+    xi: list[dict] = []
+    # Minimums
+    xi += by_pos["GK"][:1]
+    xi += by_pos["DEF"][:3]
+    xi += by_pos["MID"][:2]
+    xi += by_pos["FWD"][:1]
+    # Remaining 4 spots — highest ev outfielders not yet in xi
+    remaining = [p for p in squad15 if p not in xi and p["position"] != "GK"]
+    remaining.sort(key=lambda x: -x["ev_strategy"])
+    xi += remaining[:4]
+    bench = [p for p in squad15 if p not in xi]
+
+    # Captain = highest ev_strategy among MID+FWD in XI (live captain refresh
+    # overwrites this later with per-model selector)
+    attackers = [p for p in xi if p["position"] in ("MID", "FWD")]
+    captain_id = max(attackers, key=lambda x: x["ev_strategy"])["fantasy_player_id"] if attackers else xi[0]["fantasy_player_id"]
+    vice_pool = sorted(attackers, key=lambda x: -x["ev_strategy"])
+    vice_id = vice_pool[1]["fantasy_player_id"] if len(vice_pool) > 1 else None
+
+    for p in xi:
+        p["captain"] = p["fantasy_player_id"] == captain_id
+        p["vice_captain"] = p["fantasy_player_id"] == vice_id
+
+    return {
+        "starting_xi": xi,
+        "bench": bench,
+        "captain_id": captain_id,
+        "vice_captain_id": vice_id,
+        "formation": f"{sum(1 for p in xi if p['position']=='DEF')}-{sum(1 for p in xi if p['position']=='MID')}-{sum(1 for p in xi if p['position']=='FWD')}",
+        "budget_used_m": round(sum(p["price"] for p in squad15), 1),
+        "projected_pts": round(sum(p["ev_strategy"] for p in xi) + sum(p["ev_strategy"] for p in xi if p.get("captain")), 2),
+        "transfers_from_prior_round": transfers_made,
+        "carried_from_prior_round": True,
+    }
+
+
 def assemble_strategy_squad(scored: pd.DataFrame, strat: dict,
                              budget_m: float = 100.0,
                              max_per_nation: int = 3,

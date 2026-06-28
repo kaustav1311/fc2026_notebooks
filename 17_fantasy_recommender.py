@@ -40,6 +40,10 @@ from lib.recommender import (
     tag_anti_picks,
     assemble_strategy_squad,
     assemble_sb_hunter_squad,
+    carry_squad_with_transfers,
+    persist_squad,
+    load_prior_squad,
+    FREE_TRANSFERS_BY_ROUND,
     build_position_suggestor,
     refresh_live_percent_selected,
     refresh_squad_captain_and_bench,
@@ -1183,6 +1187,14 @@ def main():
     # 8. Squads — ONE per model. M4 uses the custom SB Hunter assembler;
     # the rest use the generic assembler with ev_model sort + SB-quota cap.
     print(f"[17] assembling {len(MODEL_REGISTRY)} challenge squads…")
+    # Carry policy: R1..R3 rebuild (group stage churn). R4 R32 rebuild (FIFA
+    # reset window). R5..R8 carry prior squad and apply only N free transfers.
+    # The carried path uses load_prior_squad(model_id, target-1); if missing
+    # (first run after deploying squad-carry), falls back to rebuild.
+    use_carry = target >= 5
+    if use_carry:
+        print(f"[17]   target R{target} uses CARRY mode "
+              f"(prior R{target-1} squad + {FREE_TRANSFERS_BY_ROUND.get(target, 2)} transfers)")
     squads = []
     for mid, cfg in MODEL_REGISTRY.items():
         strat = model_to_strategy(mid, cfg)
@@ -1191,14 +1203,34 @@ def main():
         strat["target_round_id"] = target
         scored = model_outputs[mid]
         assembler_kind = cfg.get("assembler", "default")
-        if assembler_kind == "sb_hunter":
-            sq = assemble_sb_hunter_squad(scored, strat, budget_m=100.0, max_per_nation=3)
-            sq_unbud = assemble_sb_hunter_squad(scored, strat, budget_m=100.0,
-                                                  max_per_nation=3, non_budget=True)
+
+        prior = load_prior_squad(mid, target - 1) if use_carry else None
+        if use_carry and prior is not None:
+            free_t = FREE_TRANSFERS_BY_ROUND.get(target, 2)
+            sq = carry_squad_with_transfers(prior, scored, free_t,
+                                            budget_m=100.0, max_per_nation=3)
+            sq["assembler_path"] = "carry_with_transfers"
+            sq["prior_squad_round"] = target - 1
+            # Also compute the unbudgeted ideal so K can see "what if we
+            # ignored carry" — useful UI for understanding which transfers
+            # we're missing
+            if assembler_kind == "sb_hunter":
+                sq_unbud = assemble_sb_hunter_squad(scored, strat, budget_m=100.0,
+                                                      max_per_nation=3, non_budget=True)
+            else:
+                sq_unbud = assemble_strategy_squad(scored, strat, budget_m=100.0,
+                                                    max_per_nation=3, non_budget=True)
         else:
-            sq = assemble_strategy_squad(scored, strat, budget_m=100.0, max_per_nation=3)
-            sq_unbud = assemble_strategy_squad(scored, strat, budget_m=100.0,
-                                                max_per_nation=3, non_budget=True)
+            if assembler_kind == "sb_hunter":
+                sq = assemble_sb_hunter_squad(scored, strat, budget_m=100.0, max_per_nation=3)
+                sq_unbud = assemble_sb_hunter_squad(scored, strat, budget_m=100.0,
+                                                      max_per_nation=3, non_budget=True)
+            else:
+                sq = assemble_strategy_squad(scored, strat, budget_m=100.0, max_per_nation=3)
+                sq_unbud = assemble_strategy_squad(scored, strat, budget_m=100.0,
+                                                    max_per_nation=3, non_budget=True)
+            sq["assembler_path"] = "rebuild_from_scratch"
+        sq["model_id"] = mid
         sq["unbudgeted_variant"] = sq_unbud
         sq["target_round_id"] = target
         sq["snapshot_ts"] = snapshot_ts
@@ -1270,6 +1302,18 @@ def main():
     except Exception as exc:  # noqa: BLE001
         print(f"[17]   WARN: live captain refresh failed ({exc}); "
               f"sticking with lock-bounded captain")
+
+    # Persist FINAL post-refresh squad per model for next round's carry path.
+    # Done unconditionally — even on first deploy, R{N} persists so R{N+1}
+    # carry path has data. No-op if writes fail.
+    for sq in squads:
+        try:
+            mid = sq.get("model_id")
+            if mid:
+                persist_squad(sq, mid, target)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[17]   WARN: persist_squad failed for {sq.get('model_id')}: {exc}")
+    print(f"[17]   persisted {len(squads)} squads to {Path('data/processed/persistent_squads')}")
 
     # 9. Historical snapshot (per-round-lock freeze)
     history_dir = PROC / "history" / f"round_{target:02d}"
