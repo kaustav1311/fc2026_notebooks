@@ -924,6 +924,11 @@ MODEL_REGISTRY = {
         # Captain selector: pick FWD with highest sure-shot-fwd post-boost
         # (or influential MID if no FWD in XI).
         "captain_selector": "sure_shot_fwd",
+        # 2026-06-28: M4 ignores the new underdog haircut. Its entire edge
+        # is picking contrarian upset shots — Sweden vs France, Algeria vs
+        # Swiss, etc. The other 3 models apply the haircut and avoid such
+        # picks; M4 keeps them on the table.
+        "suppress_underdog_haircut": True,
     },
 }
 
@@ -984,9 +989,19 @@ def _apply_model_boosts(brackets_df: pd.DataFrame, raw_df: pd.DataFrame,
     else:
         composite = bracket_sum_model
 
-    # Fixture amplifier — Form Hunter dampens it slightly; others full
+    # Fixture amplifier — Form Hunter dampens it slightly; others full.
+    # 2026-06-28: M4 SB Hunter is meant to be contrarian. If we leave the
+    # base B5 (which includes the new underdog haircut) untouched, M4's
+    # contrarian picks like Sweden vs France get the same 0.55x penalty as
+    # in M1 Banker, defeating the model's whole point. So when "suppress
+    # underdog haircut" is true (M4 only), we re-derive B5 from the pre-
+    # haircut value, then re-clip.
     fix_amp = model_cfg["fixture_amplifier"]
-    effective_b5 = 1.0 + (df["b5_fixture_mult"] - 1.0) * fix_amp
+    if model_cfg.get("suppress_underdog_haircut") and "b5_fixture_mult_pre_underdog" in df.columns:
+        b5_for_model = df["b5_fixture_mult_pre_underdog"].clip(0.20, 1.80)
+    else:
+        b5_for_model = df["b5_fixture_mult"]
+    effective_b5 = 1.0 + (b5_for_model - 1.0) * fix_amp
 
     ev_model = (composite * 6.5 * effective_b5).round(2)
 
@@ -1434,19 +1449,41 @@ def score_players_brackets(round_id: int, fixture_profiles: pd.DataFrame,
         "group": 1.00, "r32": 1.15, "r16": 1.25, "qf": 1.40, "sf": 1.55, "final": 1.55,
     }).fillna(1.00)
 
-    # Position-conditional fixture quality
+    # Position-conditional fixture quality. 2026-06-28: re-centered so the
+    # opponent-strength multiplier actually PENALIZES tough fixtures, not
+    # just amplifies easy ones. The previous (1.0 + (1-opp)*K) was always
+    # >=1.0 — even a player facing a top-tier opp got no haircut, so Sweden's
+    # Isak vs France kept ranking high. New range: 0.55..1.45 for FWD/MID,
+    # 0.45..1.55 for DEF/GK (DEF more sensitive to opp attacking power).
     fwd_mid_fix = (
         (0.5 + goals_idx)                  # 0.5-1.5: high-goal fixtures amplify
-        * (1.0 + (1 - opp_strength) * 0.3) # weaker opp adds up to 30%
+        * (0.55 + (1 - opp_strength) * 0.9) # 0.55 (vs elite) -> 1.45 (vs minnow)
         * (1.0 + heavy_hitter * 0.15)      # clutch teams add 15%
     )
     def_gk_fix = (
         (0.6 + team_cs)                    # 0.6-1.6: high-CS-prob fixtures amplify
-        * (1.0 + (1 - opp_strength) * 0.4) # weak opp attack adds 40%
+        * (0.45 + (1 - opp_strength) * 1.1) # 0.45 (vs elite) -> 1.55 (vs minnow)
         * (1.0 + heavy_hitter * 0.10)
     )
     base_fix = np.where(pos.isin(["FWD", "MID"]), fwd_mid_fix, def_gk_fix)
     base_fix = pd.Series(base_fix, index=df.index)
+
+    # 2026-06-28: underdog haircut — big mismatches get an additional
+    # multiplicative penalty UNLESS the strategy explicitly targets
+    # contrarian picks (M4 SB Hunter). Triggers when nation_strength_delta
+    # is sharply negative (player's nation is the heavy underdog).
+    # delta is signed home-perspective; signed_for_nation flips it so
+    # negative always means "my side is weaker by delta".
+    is_home = df["is_home"].fillna(False).astype(bool) if "is_home" in df.columns else pd.Series(False, index=df.index)
+    nat_delta = df["nation_strength_delta"].fillna(0.0).astype(float) if "nation_strength_delta" in df.columns else pd.Series(0.0, index=df.index)
+    signed_for_nation = np.where(is_home, nat_delta, -nat_delta)
+    # Heavy-underdog haircut: at delta_for_nation = -0.30 -> 0.75x;
+    # -0.50 -> 0.55x; 0 or positive -> 1.0x (no penalty).
+    underdog_haircut = np.clip(1.0 + signed_for_nation * 0.85, 0.50, 1.0)
+    underdog_haircut = pd.Series(underdog_haircut, index=df.index)
+    # M4 SB Hunter is meant to be contrarian; the haircut is suppressed
+    # downstream in _apply_model_boosts. For the base bracket scoring
+    # everything else applies — see notes there.
 
     # Modifiers
     weather_drag = pd.Series(0.0, index=df.index)
@@ -1459,7 +1496,11 @@ def score_players_brackets(round_id: int, fixture_profiles: pd.DataFrame,
     mkt_div = df["mkt_composite_divergence"].fillna(0.0).astype(float) if "mkt_composite_divergence" in df.columns else pd.Series(0.0, index=df.index)
     div_mod = 1.0 + mkt_div * 0.10  # up to 10% boost when market disagrees
 
-    b5 = (base_fix * stage_mult * (1 - weather_drag) * trend_mod * div_mod).clip(0.20, 1.80)
+    # 2026-06-28: stash the underdog haircut on the frame so _apply_model_
+    # boosts can scale it down for M4 SB Hunter (contrarian) without
+    # changing the base score. Default behavior multiplies it into B5.
+    b5_base = (base_fix * stage_mult * (1 - weather_drag) * trend_mod * div_mod)
+    b5 = (b5_base * underdog_haircut).clip(0.20, 1.80)
 
     # ═══════ Composite EV ════════════════════════════════════════════════════
     bracket_sum = (
@@ -1494,6 +1535,11 @@ def score_players_brackets(round_id: int, fixture_profiles: pd.DataFrame,
     base["b3_external"] = b3.round(3)
     base["b4_fantasy"] = b4.round(3)
     base["b5_fixture_mult"] = b5.round(3)
+    # Stash the pre-haircut B5 + the haircut itself so model post-boosts
+    # can re-derive a contrarian-friendly B5 (M4 SB Hunter suppresses the
+    # underdog penalty since its whole edge is contrarian upset picks).
+    base["b5_fixture_mult_pre_underdog"] = b5_base.round(3)
+    base["underdog_haircut"] = underdog_haircut.round(3)
     base["bracket_sum"] = bracket_sum.round(3)
     base["ev_bracket"] = ev_bracket.round(2)
     base["round_id"] = round_id
