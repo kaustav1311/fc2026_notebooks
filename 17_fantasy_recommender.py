@@ -959,16 +959,19 @@ def tag_chips(row):
     return chips
 
 
-def model_to_strategy(model_id: str, cfg: dict) -> dict:
-    """Translate a MODEL_REGISTRY entry to a strategy dict the assembler accepts."""
+def model_to_strategy(model_id: str, cfg: dict, ev_col: str = "ev_model") -> dict:
+    """Translate a MODEL_REGISTRY entry to a strategy dict the assembler accepts.
+
+    ev_col: which column on the scored frame the assembler sorts on. Default
+    `ev_model` is per-round EV (suggestion layer). For R4+ squad assembly,
+    pass `ev_model_path` so the assembler considers path-to-Final value.
+    """
     return {
         "id": model_id,
         "name": cfg["name"],
         "blurb": cfg["blurb"],
         "sb_quota": cfg["sb_quota"],
-        # The assembler picks up ev_col first; the α/β/γ fields are ignored
-        # but kept for legacy code paths that may still read them.
-        "ev_col": "ev_model",
+        "ev_col": ev_col,
         "alpha_floor": 0.0,
         "beta_ceiling": 0.0,
         "gamma_differential": 0.0,
@@ -979,8 +982,22 @@ def model_to_strategy(model_id: str, cfg: dict) -> dict:
 
 def main():
     snapshot_ts = datetime.now(timezone.utc).isoformat()
-    target = pick_target_round()
-    print(f"[17] target round: {target}  (snapshot {snapshot_ts})")
+    # FORCE_TARGET_ROUND=N — diagnostic / once-off run for a specific round
+    # (e.g. when group stage is finished in real-world but our upstream
+    # status hasn't flipped yet, set FORCE_TARGET_ROUND=4 to pre-build R32
+    # squads with bracket-depth boost). Caller responsibility: don't commit
+    # the emitted JSONs if the forced round doesn't have real data yet.
+    forced = os.environ.get("FORCE_TARGET_ROUND")
+    if forced:
+        try:
+            target = int(forced)
+            print(f"[17] target round: {target}  (FORCED via env, snapshot {snapshot_ts})")
+        except ValueError:
+            target = pick_target_round()
+            print(f"[17] target round: {target}  (bad FORCE_TARGET_ROUND={forced!r}, ignored)")
+    else:
+        target = pick_target_round()
+        print(f"[17] target round: {target}  (snapshot {snapshot_ts})")
 
     # Freeze inputs at post-R(target-1) state. Lib functions look up `PROC`
     # at call time, so rebinding the module attribute is enough — no edits to
@@ -1186,6 +1203,41 @@ def main():
 
     # 8. Squads — ONE per model. M4 uses the custom SB Hunter assembler;
     # the rest use the generic assembler with ev_model sort + SB-quota cap.
+    # ── Bracket-depth EV boost for the SQUAD layer (R4+ only) ────────────
+    # User direction: suggestion layer (joint_picks) stays per-round and
+    # upcoming-fixture-focused; squad layer must account for path-to-Final.
+    # Adds an `ev_model_path` column to each model's scored frame and routes
+    # the squad assembler through it. ev_model itself stays untouched so
+    # build_joint_picks downstream is unaffected.
+    path_factors: dict[str, dict] = {}
+    if target >= 4:
+        try:
+            from lib.bracket_depth import (
+                expected_future_rounds_by_nation, apply_path_boost_to_scored,
+            )
+            from lib.recommender import nation_strength_composite
+            # nation_strength_composite reads PROC; PROC was restored above
+            # so it sees live data (we want path estimates against current
+            # bracket state, not the round-locked one).
+            ns = nation_strength_composite()
+            ns_lookup = ns.set_index("nation_id")["nation_total_strength"].to_dict()
+            matches_for_path = pd.read_parquet(PROC / "wc26_stg_matches.parquet")
+            nations_for_path = pd.read_parquet(PROC / "wc26_stg_nations.parquet")
+            path_factors = expected_future_rounds_by_nation(
+                matches_for_path, nations_for_path, target, ns_lookup,
+            )
+            print(f"[17] bracket-depth boost active: {len(path_factors)} nations "
+                  f"in R{target}+ bracket; alpha=0.15")
+            # Apply boost to each model's scored frame as a NEW column
+            for mid in list(model_outputs.keys()):
+                model_outputs[mid] = apply_path_boost_to_scored(
+                    model_outputs[mid], path_factors, alpha=0.15,
+                    out_col="ev_model_path",
+                )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[17]   WARN: bracket-depth boost skipped ({exc}); "
+                  f"squad assembler will sort on ev_model")
+
     print(f"[17] assembling {len(MODEL_REGISTRY)} challenge squads…")
     # Carry policy: R1..R3 rebuild (group stage churn). R4 R32 rebuild (FIFA
     # reset window). R5..R8 carry prior squad and apply only N free transfers.
@@ -1196,8 +1248,11 @@ def main():
         print(f"[17]   target R{target} uses CARRY mode "
               f"(prior R{target-1} squad + {FREE_TRANSFERS_BY_ROUND.get(target, 2)} transfers)")
     squads = []
+    # For R4+ the squad assembler sorts on `ev_model_path` (bracket-depth-
+    # boosted). For R1..R3 it stays on `ev_model` (per-round only).
+    squad_ev_col = "ev_model_path" if (target >= 4 and path_factors) else "ev_model"
     for mid, cfg in MODEL_REGISTRY.items():
-        strat = model_to_strategy(mid, cfg)
+        strat = model_to_strategy(mid, cfg, ev_col=squad_ev_col)
         # Thread target round into strat so the assembler's plan_chips() can
         # snap chip rounds forward past the current FIFA lock window.
         strat["target_round_id"] = target
