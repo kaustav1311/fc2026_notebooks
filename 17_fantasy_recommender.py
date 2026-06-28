@@ -1226,12 +1226,17 @@ def main():
             path_factors = expected_future_rounds_by_nation(
                 matches_for_path, nations_for_path, target, ns_lookup,
             )
+            # 2026-06-28: alpha bumped 0.15 -> 0.25 per user direction —
+            # nations going deep should dominate the strategy squads,
+            # not be a tiebreaker. ev_model_path = ev_model * (1 + 0.25 *
+            # expected_future_rounds), so a SF-likely nation (EFR ~3) gets
+            # ~1.75x boost vs an R32-and-out nation (EFR ~1) at 1.25x.
+            PATH_ALPHA = 0.25
             print(f"[17] bracket-depth boost active: {len(path_factors)} nations "
-                  f"in R{target}+ bracket; alpha=0.15")
-            # Apply boost to each model's scored frame as a NEW column
+                  f"in R{target}+ bracket; alpha={PATH_ALPHA}")
             for mid in list(model_outputs.keys()):
                 model_outputs[mid] = apply_path_boost_to_scored(
-                    model_outputs[mid], path_factors, alpha=0.15,
+                    model_outputs[mid], path_factors, alpha=PATH_ALPHA,
                     out_col="ev_model_path",
                 )
         except Exception as exc:  # noqa: BLE001
@@ -1370,24 +1375,40 @@ def main():
             print(f"[17]   WARN: persist_squad failed for {sq.get('model_id')}: {exc}")
     print(f"[17]   persisted {len(squads)} squads to {Path('data/processed/persistent_squads')}")
 
-    # 8c. Per-round final ARCHIVE (joint_picks + strategy_squads).
-    # Overwritten every tick while target stays at R{N}; the last write
-    # before target flips to R{N+1} is the canonical "final-of-round-N"
-    # state, available for cross-round comparison in the PWA's
-    # CheckpointPicker. Both warehouse + PWA copies are kept.
+    # 8c. Per-round final ARCHIVE (joint_picks + strategy_squads +
+    # position_suggestor) — IMMUTABLE once written. The first cron tick
+    # for R{N} writes the archive; subsequent ticks for the same target
+    # do NOT overwrite. This locks the historical baseline before any
+    # live drift can creep in.
+    #
+    # Rationale (2026-06-28): a previous "overwrite each tick" design
+    # meant the last R{N} write before target flipped to R{N+1} was the
+    # canonical final — fine except (a) the archive code shipped AFTER
+    # target had already flipped to R4 so R3 was never written, and (b)
+    # any FORCE_TARGET_ROUND=N diagnostic run would silently overwrite a
+    # previously-valid archive. Locking on first write closes both.
+    #
+    # FORCE_ARCHIVE_OVERWRITE=1 env var bypasses the lock for explicit
+    # retroactive regeneration.
     archive_dir = PROC / "round_archives"
     archive_dir.mkdir(parents=True, exist_ok=True)
+    force_overwrite = os.environ.get("FORCE_ARCHIVE_OVERWRITE") == "1"
+    archive_actions = []
     for kind, payload in (
         ("joint_picks", joint),
         ("strategy_squads", squads),
         ("position_suggestor", suggestor),
     ):
         fname = f"wc26_fantasy_{kind}_R{target:02d}_final.json"
+        existing = archive_dir / fname
+        if existing.exists() and not force_overwrite:
+            archive_actions.append(f"kept-existing:{kind}")
+            continue
         safe_payload = dump_js_safe(payload)
-        (archive_dir / fname).write_text(safe_payload)
+        existing.write_text(safe_payload)
         (PWA_JSON / fname).write_text(safe_payload)
-    print(f"[17]   wrote round-archive copies for R{target:02d} "
-          f"(joint_picks + strategy_squads + position_suggestor)")
+        archive_actions.append(f"wrote:{kind}")
+    print(f"[17]   round-archive R{target:02d}: {', '.join(archive_actions)}")
 
     # 9. Historical snapshot (per-round-lock freeze)
     history_dir = PROC / "history" / f"round_{target:02d}"

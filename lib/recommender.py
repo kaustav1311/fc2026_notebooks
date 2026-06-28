@@ -736,6 +736,14 @@ B2_STATS = {
             "fotmob_wc_tackles", "fotmob_wc_duels_won_pct",
             "fifa_wc_CleanSheets", "fifa_wc_CrossesCompleted",
             "fifa_wc_LinebreaksCompletedUnderPressure",
+            # 2026-06-28: attacking-defender signal. User asked for the model
+            # to surface wingbacks who contribute to goals/assists, not just
+            # pure ball-stoppers. CleanSheets stays as the floor; these add
+            # the upside ceiling. Bumps wingback-style DEFs (Hakimi /
+            # Dumfries / Davies archetype) over pure-CB picks at equal CS
+            # probability.
+            "fifa_wc_Goals", "fifa_wc_Assists",
+            "fifa_wc_AttemptAtGoalOnTarget",
         ],
         "fdh_score": "avg_defensive_score",
     },
@@ -1301,13 +1309,18 @@ def score_players_brackets(round_id: int, fixture_profiles: pd.DataFrame,
     # Position-conditional weighting
     pos = df["position"].fillna("MID")
     b1_w_attack = pos.isin(["FWD", "MID"]).astype(float)
+    # 2026-06-28: bumped nation_strength weight 0.20 -> 0.30. User asked for
+    # stronger nation-strength bias in KO picks. Bracket-depth boost (which
+    # already weights "likely to advance" nations) compounds this for R4+.
+    # Total component weights now sum to >1.0 by design — the renormalize-
+    # to-max step at the end re-scales to [0,1] regardless.
     b1 = (
-        0.20 * b1_components["nation_strength"]
-        + 0.15 * b1_components["club_rating_pct"]
-        + 0.15 * b1_components["club_goals_per_app_pct"] * b1_w_attack
-        + 0.10 * b1_components["club_apps_pct"]
-        + 0.10 * b1_components["national_rating_pct"]
-        + 0.15 * b1_components["national_goals_pct"] * b1_w_attack
+        0.30 * b1_components["nation_strength"]
+        + 0.13 * b1_components["club_rating_pct"]
+        + 0.13 * b1_components["club_goals_per_app_pct"] * b1_w_attack
+        + 0.08 * b1_components["club_apps_pct"]
+        + 0.08 * b1_components["national_rating_pct"]
+        + 0.13 * b1_components["national_goals_pct"] * b1_w_attack
         + 0.15 * b1_components["log_value_pct"]
     )
     # Renormalize because attack-only components sometimes contribute 0 (DEF/GK)
