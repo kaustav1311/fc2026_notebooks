@@ -66,6 +66,11 @@ NOTEBOOK_BUCKETS: dict[str, list[str]] = {
         # guaranteed fresh on the same tick.
         "14_staging_core",
         "15_staging_matches",
+        # _derive_knockout_pairings — runs AFTER 15 (which produces
+        # wc26_stg_matches) so it can apply Annex C derivation back onto the
+        # staging table. Populates home_nation_id/away_nation_id for KO rows
+        # the moment group standings finalize. Plain .py module, no notebook.
+        "_derive_knockout_pairings",
         "16_staging_players",
         # 18 — 365scores trends per-fixture snapshot. Depends on
         # wc26_stg_matches + wc26_stg_nations (both built by 14/15), so runs
