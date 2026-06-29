@@ -69,6 +69,12 @@ NOTEBOOK_BUCKETS: dict[str, list[str]] = {
         # the rest of the bundle keeps moving). Appends to a long-format
         # history parquet the PWA's RaceChart reads.
         "13a_polymarket_winner_history",
+        # 13b — bar-chart-race GIF of the winner market over time. Reads
+        # 13a's history parquet; silently skips until ≥3 snapshots have
+        # accumulated. Writes a PNG/GIF under data/processed/static/ which
+        # the workflow's emit step copies to the PWA repo alongside JSONs.
+        # Matplotlib + Pillow are the only deps — no ffmpeg needed.
+        "13b_polymarket_winner_race_chart",
         # Staging tables (no network calls — pure pandas over the parquets above).
         # Listed before the dependents-on-staging so every upstream input is
         # guaranteed fresh on the same tick.

@@ -272,6 +272,15 @@ jobs:
           fi
           mkdir -p pwa-repo/public/data
           cp data/processed/json/*.json pwa-repo/public/data/
+          # Static assets (GIFs/PNGs produced by 13b_polymarket_winner_race_chart
+          # and any future similar generators). Copy is best-effort — the
+          # static dir may not exist on a cold run, and 13b skips silently
+          # while the winner-history parquet has too few snapshots to animate.
+          if compgen -G "data/processed/static/*" > /dev/null; then
+            cp data/processed/static/* pwa-repo/public/data/
+          else
+            echo "::notice::no static assets produced this tick"
+          fi
           cd pwa-repo
           # Vercel ties a deployment to a GitHub account via the commit
           # author email. The made-up @users.noreply.github.com address it

@@ -8,3 +8,9 @@ remotezip>=0.12
 nbformat>=5
 nbclient>=0.10
 scikit-learn>=1.4
+# 13b_polymarket_winner_race_chart.py renders an animated bar-chart-race
+# GIF of the world-cup-winner market over time. matplotlib + Pillow are
+# the only deps — PillowWriter is matplotlib's native GIF backend, no
+# ffmpeg required.
+matplotlib>=3.7
+Pillow>=10.0
