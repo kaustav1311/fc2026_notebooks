@@ -42,6 +42,8 @@ from lib.http import polite_get  # noqa: E402
 
 HISTORY_PARQUET = ROOT / "data" / "processed" / "wc26_polymarket_winner_history.parquet"
 HISTORY_CSV     = ROOT / "data" / "processed" / "wc26_polymarket_winner_history.csv"
+SUMMARY_PARQUET = ROOT / "data" / "processed" / "wc26_polymarket_winner_summary.parquet"
+SUMMARY_CSV     = ROOT / "data" / "processed" / "wc26_polymarket_winner_summary.csv"
 RETENTION_DAYS  = 60
 GAMMA_URL       = "https://gamma-api.polymarket.com/events?slug=world-cup-winner"
 
@@ -233,6 +235,45 @@ def main() -> int:
     print(
         f"[poly-winner] history rows={len(combined)}  distinct snapshots={snapshots}  "
         f"file={HISTORY_PARQUET.relative_to(ROOT)}"
+    )
+
+    # Single-row summary parquet — the PWA consumes this for the dashboard's
+    # "Winner Prediction" headline because Gamma's event-level `volume`
+    # field is unreliable (often 0). Summing each team's market volume
+    # gives the right pool size, and adding latest top-team pct lets the
+    # PWA show a meaningful live-ish snapshot without hitting Gamma.
+    market_volume_sum = float(snap["volume"].fillna(0).sum())
+    event_volume = (
+        float(snap["event_volume"].dropna().iloc[0])
+        if "event_volume" in snap.columns and not snap["event_volume"].dropna().empty
+        else 0.0
+    )
+    top = snap.sort_values("pct", ascending=False).head(5)
+    summary_row = {
+        "snapshot_ts": snap_ts,
+        "polymarket_event_id": event.get("id"),
+        # Use the larger of the two — event-level when populated, else the
+        # sum-of-markets fallback. Both come from Gamma.
+        "total_volume": max(event_volume, market_volume_sum),
+        "event_volume": event_volume,
+        "market_volume_sum": market_volume_sum,
+        "team_count": int(snap["team_name"].nunique()),
+        "top1_team": top.iloc[0]["team_name"] if not top.empty else None,
+        "top1_nation_id": top.iloc[0]["nation_id"] if not top.empty else None,
+        "top1_pct": float(top.iloc[0]["pct"]) if not top.empty else None,
+        "top2_team": top.iloc[1]["team_name"] if len(top) > 1 else None,
+        "top2_nation_id": top.iloc[1]["nation_id"] if len(top) > 1 else None,
+        "top2_pct": float(top.iloc[1]["pct"]) if len(top) > 1 else None,
+        "top3_team": top.iloc[2]["team_name"] if len(top) > 2 else None,
+        "top3_nation_id": top.iloc[2]["nation_id"] if len(top) > 2 else None,
+        "top3_pct": float(top.iloc[2]["pct"]) if len(top) > 2 else None,
+    }
+    summary_df = pd.DataFrame([summary_row])
+    summary_df.to_parquet(SUMMARY_PARQUET, index=False)
+    summary_df.to_csv(SUMMARY_CSV, index=False)
+    print(
+        f"[poly-winner] summary: total_volume=${summary_row['total_volume']:,.0f}  "
+        f"top1={summary_row['top1_team']}@{summary_row['top1_pct']}%"
     )
     return 0
 

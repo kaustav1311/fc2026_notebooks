@@ -71,6 +71,16 @@ EMIT: list[str] = [
     "wc26_fantasy_recommendations",
 ]
 
+# Tables whose parquet may not exist on a cold runner. Treated the same as
+# EMIT (full-column emit) except we silently skip when the file isn't
+# there yet — the producer might not have run, or the data isn't ready.
+EMIT_IF_PRESENT: list[str] = [
+    # Single-row summary from 13a — Winner Prediction headline volume +
+    # latest top-3 teams. Lets the PWA dashboard skip a live Gamma fetch
+    # for the headline number.
+    "wc26_polymarket_winner_summary",
+]
+
 # History tables emit as SLIM rows — only the columns the PWA needs. Keeps
 # the JSON payload tight even as snapshots accumulate across the tournament.
 SLIM_EMIT_HISTORY: dict[str, list[str]] = {
@@ -166,3 +176,10 @@ if __name__ == "__main__":
             print(f"  SKIP {name}: parquet not present yet (history will populate on next tick)")
             continue
         emit(name, cols)
+    # Optional full-column tables that may not exist on a cold runner.
+    for name in EMIT_IF_PRESENT:
+        src = ROOT / "data" / "processed" / f"{name}.parquet"
+        if not src.exists():
+            print(f"  SKIP {name}: parquet not present yet")
+            continue
+        emit(name)
