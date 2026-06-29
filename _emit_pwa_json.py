@@ -71,6 +71,21 @@ EMIT: list[str] = [
     "wc26_fantasy_recommendations",
 ]
 
+# History tables emit as SLIM rows — only the columns the PWA needs. Keeps
+# the JSON payload tight even as snapshots accumulate across the tournament.
+SLIM_EMIT_HISTORY: dict[str, list[str]] = {
+    # 13a snapshot: per-tick winner-probability time series. PWA's
+    # TourneyDashboard race chart reads just (snapshot_ts, nation_id,
+    # team_name, pct). yes_price / volume / closed / active stay in the
+    # parquet for analysis but are dropped from the JSON to keep it small.
+    "wc26_polymarket_winner_history": [
+        "snapshot_ts",
+        "team_name",
+        "nation_id",
+        "pct",
+    ],
+}
+
 # Slim emit: only a subset of columns for very wide tables. wc26_stg_players is
 # 1248 x 190; the PWA only needs identity / face / club / nation fields today.
 # Full emit can be added later when the player profile rework needs the deep
@@ -141,4 +156,13 @@ if __name__ == "__main__":
     for name in EMIT:
         emit(name)
     for name, cols in SLIM_EMIT.items():
+        emit(name, cols)
+    # History tables are emitted slim — a missing parquet just means the
+    # producer hasn't run yet (e.g. fresh runner, no Polymarket snapshot
+    # collected). Skip with a notice rather than failing the whole emit step.
+    for name, cols in SLIM_EMIT_HISTORY.items():
+        src = ROOT / "data" / "processed" / f"{name}.parquet"
+        if not src.exists():
+            print(f"  SKIP {name}: parquet not present yet (history will populate on next tick)")
+            continue
         emit(name, cols)

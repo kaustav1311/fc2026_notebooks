@@ -61,6 +61,14 @@ NOTEBOOK_BUCKETS: dict[str, list[str]] = {
         "11_fotmob_wc_and_form",
         "12_match_weather",
         "13_polymarket",
+        # 13a — per-tick snapshot of the world-cup-winner market's per-team
+        # implied probabilities. Runs AFTER 13 so the wc26_nations alias map
+        # 13a needs is guaranteed present, and so a Polymarket outage that
+        # trips 13 doesn't double-fail here (13a fetches its own URL and is
+        # itself failure-tolerant — it exits 0 even on HTTP/parse errors so
+        # the rest of the bundle keeps moving). Appends to a long-format
+        # history parquet the PWA's RaceChart reads.
+        "13a_polymarket_winner_history",
         # Staging tables (no network calls — pure pandas over the parquets above).
         # Listed before the dependents-on-staging so every upstream input is
         # guaranteed fresh on the same tick.
